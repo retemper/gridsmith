@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  changed:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      should_skip: ${{ steps.changed-files.outputs.only_changed == 'true' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: tj-actions/changed-files@22103cc46bda19c2b464ffe86db46df6922fd323 # v47.0.5
+        id: changed-files
+        with:
+          files: |
+            **.md
+            LICENSE
+            .editorconfig
+            .github/ISSUE_TEMPLATE/**
+            .github/pull_request_template.md
+
+  lint:
+    needs: changed
+    if: needs.changed.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Lint & format
+        run: |
+          pnpm turbo lint &
+          pid1=$!
+          pnpm format:check &
+          pid2=$!
+          wait $pid1 && wait $pid2
+
+      - run: pnpm turbo build
+      - run: pnpm turbo type-check
+
+  test:
+    needs: changed
+    if: needs.changed.outputs.should_skip != 'true'
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        node-version: [22]
+        include:
+          - os: macos-latest
+            node-version: 22
+          - os: windows-latest
+            node-version: 22
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm turbo build
+
+      - run: pnpm turbo test
+
+  changeset:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Check for changesets
+        run: pnpm changeset status --since=origin/main
+
+  ci-passed:
+    if: always()
+    needs: [lint, test, changeset]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.lint.result }}" != "success" && "${{ needs.lint.result }}" != "skipped" ]] || \
+             [[ "${{ needs.test.result }}" != "success" && "${{ needs.test.result }}" != "skipped" ]] || \
+             [[ "${{ needs.changeset.result }}" != "success" && "${{ needs.changeset.result }}" != "skipped" ]]; then
+            echo "CI failed (lint=${{ needs.lint.result }}, test=${{ needs.test.result }}, changeset=${{ needs.changeset.result }})"
+            exit 1
+          fi
+          echo "CI passed"

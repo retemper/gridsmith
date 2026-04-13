@@ -1,0 +1,56 @@
+{
+  "private": true,
+  "type": "module",
+  "name": "gridsmith-monorepo",
+  "description": "MIT-licensed data grid with Excel-grade editing",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/retemper/gridsmith"
+  },
+  "bugs": "https://github.com/retemper/gridsmith/issues",
+  "homepage": "https://github.com/retemper/gridsmith#readme",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=10"
+  },
+  "keywords": [
+    "datagrid",
+    "data-grid",
+    "spreadsheet",
+    "react",
+    "editing",
+    "virtualization",
+    "table",
+    "grid"
+  ],
+  "scripts": {
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "docs:dev": "pnpm --filter @gridsmith/docs dev",
+    "docs:build": "pnpm --filter @gridsmith/docs build",
+    "docs:preview": "pnpm --filter @gridsmith/docs preview",
+    "playground:dev": "pnpm --filter @gridsmith/playground dev",
+    "changeset": "changeset",
+    "changeset:version": "changeset version",
+    "changeset:publish": "changeset publish",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.6.0",
+    "@changesets/cli": "^2.30.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^4.1.0",
+    "eslint": "^10.1.0",
+    "eslint-plugin-import-x": "^4.16.2",
+    "eslint-plugin-unicorn": "^64.0.0",
+    "husky": "^9.1.0",
+    "lint-staged": "^16.1.0",
+    "prettier": "^3.4.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.57.1"
+  },
+  "packageManager": "pnpm@10.22.0"
+}

@@ -1,0 +1,10 @@
+packages:
+  - packages/*
+  - apps/*
+  - examples/*
+  - e2e
+
+approveBuilds: esbuild
+
+ignoredBuiltDependencies:
+  - esbuild
