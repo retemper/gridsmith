@@ -11,6 +11,7 @@ MIT-licensed data grid with Excel-grade editing. No Pro tier, ever.
 
 | Command      | Description                                                      |
 | ------------ | ---------------------------------------------------------------- |
+| `/ready`     | Find tasks ready to work on (not blocked by parent issues)       |
 | `/project`   | Project board status, create/update issues, milestone management |
 | `/rfc`       | Review RFC design docs, resolve open questions                   |
 | `/sprint`    | Sprint planning, standup, burndown                               |
