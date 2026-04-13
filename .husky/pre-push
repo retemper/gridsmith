@@ -1,0 +1,2 @@
+pnpm turbo build type-check
+pnpm turbo test -- --coverage

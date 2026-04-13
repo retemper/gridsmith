@@ -1,0 +1,52 @@
+name: Bug Report
+description: Report a bug in Gridsmith
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: A clear description of the bug.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to reproduce the behavior.
+      placeholder: |
+        1. Create a grid with `<Grid data={...} columns={...} />`
+        2. Click on cell (0, 0)
+        3. Type "hello"
+        4. See error in console
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Package version
+      placeholder: '@gridsmith/core@0.1.0'
+    validations:
+      required: true
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: Package
+      options:
+        - '@gridsmith/core'
+        - '@gridsmith/react'
+        - '@gridsmith/ui'
+        - Other
+    validations:
+      required: true
