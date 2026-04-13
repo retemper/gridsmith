@@ -1,0 +1,329 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { createGrid } from './grid';
+import type { Row, ColumnDef, GridPlugin } from './types';
+
+const sampleColumns: ColumnDef[] = [
+  { id: 'name', header: 'Name', type: 'text' },
+  { id: 'age', header: 'Age', type: 'number' },
+  { id: 'city', header: 'City', type: 'text' },
+];
+
+const sampleData: Row[] = [
+  { name: 'Alice', age: 30, city: 'Seoul' },
+  { name: 'Bob', age: 25, city: 'Tokyo' },
+  { name: 'Charlie', age: 35, city: 'Seoul' },
+];
+
+describe('createGrid', () => {
+  it('initializes with data and columns', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+
+    expect(grid.data).toHaveLength(3);
+    expect(grid.columns.get()).toHaveLength(3);
+    expect(grid.rowCount).toBe(3);
+  });
+
+  it('shallow copies initial data (does not mutate original)', () => {
+    const original = [...sampleData];
+    const grid = createGrid({ data: original, columns: sampleColumns });
+
+    grid.setCell(0, 'name', 'Modified');
+    expect(original[0]!.name).toBe('Alice'); // original unchanged
+  });
+
+  it('emits ready event on creation', () => {
+    const fn = vi.fn();
+    const plugin: GridPlugin = {
+      name: 'ready-listener',
+      init(ctx) {
+        ctx.events.on('ready', fn);
+      },
+    };
+
+    createGrid({ data: [], columns: [], plugins: [plugin] });
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('cell operations', () => {
+  it('getCell reads by view index', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    expect(grid.getCell(0, 'name')).toBe('Alice');
+    expect(grid.getCell(1, 'age')).toBe(25);
+  });
+
+  it('setCell updates in place and emits event', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.events.on('data:change', fn);
+
+    grid.setCell(0, 'name', 'Alicia');
+    expect(grid.getCell(0, 'name')).toBe('Alicia');
+    expect(fn).toHaveBeenCalledWith({
+      changes: [{ row: 0, col: 'name', oldValue: 'Alice', newValue: 'Alicia' }],
+    });
+  });
+
+  it('setCell does not emit when value is the same', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.events.on('data:change', fn);
+
+    grid.setCell(0, 'name', 'Alice');
+    expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe('data and column updates', () => {
+  it('setData replaces data and emits event', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.events.on('data:rowsUpdate', fn);
+
+    const newData = [{ name: 'Dave', age: 40, city: 'Busan' }];
+    grid.setData(newData);
+
+    expect(grid.data).toHaveLength(1);
+    expect(grid.getCell(0, 'name')).toBe('Dave');
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('setColumns replaces columns and emits event', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.events.on('columns:update', fn);
+
+    const newCols: ColumnDef[] = [{ id: 'name', header: 'Full Name' }];
+    grid.setColumns(newCols);
+
+    expect(grid.columns.get()).toHaveLength(1);
+    expect(grid.columns.get()[0]!.header).toBe('Full Name');
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('sort', () => {
+  it('sorts data by column ascending', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.sortState.set([{ columnId: 'age', direction: 'asc' }]);
+
+    expect(grid.getCell(0, 'name')).toBe('Bob'); // age 25
+    expect(grid.getCell(1, 'name')).toBe('Alice'); // age 30
+    expect(grid.getCell(2, 'name')).toBe('Charlie'); // age 35
+  });
+
+  it('sorts data descending', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.sortState.set([{ columnId: 'age', direction: 'desc' }]);
+
+    expect(grid.getCell(0, 'name')).toBe('Charlie'); // age 35
+    expect(grid.getCell(2, 'name')).toBe('Bob'); // age 25
+  });
+
+  it('supports multi-column sort', () => {
+    const data: Row[] = [
+      { name: 'Alice', age: 30, city: 'Seoul' },
+      { name: 'Bob', age: 30, city: 'Tokyo' },
+      { name: 'Charlie', age: 25, city: 'Seoul' },
+    ];
+    const grid = createGrid({ data, columns: sampleColumns });
+    grid.sortState.set([
+      { columnId: 'age', direction: 'asc' },
+      { columnId: 'name', direction: 'asc' },
+    ]);
+
+    expect(grid.getCell(0, 'name')).toBe('Charlie'); // age 25
+    expect(grid.getCell(1, 'name')).toBe('Alice'); // age 30, A < B
+    expect(grid.getCell(2, 'name')).toBe('Bob'); // age 30, B
+  });
+});
+
+describe('filter', () => {
+  it('filters by equality', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.filterState.set([{ columnId: 'city', operator: 'eq', value: 'Seoul' }]);
+
+    expect(grid.rowCount).toBe(2);
+    expect(grid.getCell(0, 'name')).toBe('Alice');
+    expect(grid.getCell(1, 'name')).toBe('Charlie');
+  });
+
+  it('filters by contains', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.filterState.set([{ columnId: 'name', operator: 'contains', value: 'li' }]);
+
+    expect(grid.rowCount).toBe(2); // Alice, Charlie
+  });
+
+  it('filters by numeric comparison', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.filterState.set([{ columnId: 'age', operator: 'gte', value: 30 }]);
+
+    expect(grid.rowCount).toBe(2); // Alice (30), Charlie (35)
+  });
+
+  it('combines sort and filter', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.filterState.set([{ columnId: 'city', operator: 'eq', value: 'Seoul' }]);
+    grid.sortState.set([{ columnId: 'age', direction: 'desc' }]);
+
+    expect(grid.rowCount).toBe(2);
+    expect(grid.getCell(0, 'name')).toBe('Charlie'); // age 35
+    expect(grid.getCell(1, 'name')).toBe('Alice'); // age 30
+  });
+});
+
+describe('indexMap', () => {
+  it('maps view to data indices', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.sortState.set([{ columnId: 'age', direction: 'asc' }]);
+
+    const map = grid.indexMap.get();
+    // Bob (age 25) is at data index 1, view index 0
+    expect(map.viewToData(0)).toBe(1);
+    expect(map.dataToView(1)).toBe(0);
+  });
+
+  it('dataToView returns null for filtered-out rows', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.filterState.set([{ columnId: 'city', operator: 'eq', value: 'Seoul' }]);
+
+    const map = grid.indexMap.get();
+    expect(map.dataToView(1)).toBeNull(); // Bob is in Tokyo, filtered out
+  });
+
+  it('throws on out-of-range viewToData', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    expect(() => grid.indexMap.get().viewToData(999)).toThrow(RangeError);
+    expect(() => grid.indexMap.get().viewToData(-1)).toThrow(RangeError);
+  });
+});
+
+describe('batchUpdate', () => {
+  it('batches multiple changes into one notification cycle', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const changeFn = vi.fn();
+    grid.events.on('data:change', changeFn);
+
+    grid.batchUpdate(() => {
+      grid.setCell(0, 'name', 'X');
+      grid.setCell(1, 'name', 'Y');
+    });
+
+    // Each setCell emits independently, but signal notifications are batched
+    expect(changeFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('subscribe helper', () => {
+  it('subscribes and unsubscribes to events', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    const unsub = grid.subscribe('data:change', fn);
+
+    grid.setCell(0, 'name', 'Test');
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    unsub();
+    grid.setCell(0, 'name', 'Test2');
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('destroy', () => {
+  it('emits destroy event and cleans up', () => {
+    const cleanupFn = vi.fn();
+    const plugin: GridPlugin = {
+      name: 'cleanup-test',
+      init: () => cleanupFn,
+    };
+    const grid = createGrid({ data: sampleData, columns: sampleColumns, plugins: [plugin] });
+
+    const destroyFn = vi.fn();
+    grid.events.on('destroy', destroyFn);
+
+    grid.destroy();
+    expect(destroyFn).toHaveBeenCalledTimes(1);
+    expect(cleanupFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('is idempotent', () => {
+    const grid = createGrid({ data: [], columns: [] });
+    grid.destroy();
+    grid.destroy(); // should not throw
+  });
+
+  it('throws on getCell after destroy', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.destroy();
+    expect(() => grid.getCell(0, 'name')).toThrow(/destroyed/);
+  });
+
+  it('throws on setCell after destroy', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.destroy();
+    expect(() => grid.setCell(0, 'name', 'X')).toThrow(/destroyed/);
+  });
+
+  it('throws on setData after destroy', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.destroy();
+    expect(() => grid.setData([])).toThrow(/destroyed/);
+  });
+
+  it('throws on setColumns after destroy', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.destroy();
+    expect(() => grid.setColumns([])).toThrow(/destroyed/);
+  });
+});
+
+describe('reactive state', () => {
+  it('indexMap recomputes on sort change', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.indexMap.subscribe(fn);
+
+    grid.sortState.set([{ columnId: 'age', direction: 'asc' }]);
+    expect(fn).toHaveBeenCalled();
+  });
+
+  it('indexMap recomputes on filter change', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.indexMap.subscribe(fn);
+
+    grid.filterState.set([{ columnId: 'city', operator: 'eq', value: 'Seoul' }]);
+    expect(fn).toHaveBeenCalled();
+  });
+
+  it('emits sort:change event when sortState changes', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.events.on('sort:change', fn);
+
+    const sort = [{ columnId: 'age', direction: 'asc' as const }];
+    grid.sortState.set(sort);
+    expect(fn).toHaveBeenCalledWith({ sort });
+  });
+
+  it('emits filter:change event when filterState changes', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.events.on('filter:change', fn);
+
+    const filter = [{ columnId: 'city', operator: 'eq' as const, value: 'Seoul' }];
+    grid.filterState.set(filter);
+    expect(fn).toHaveBeenCalledWith({ filter });
+  });
+
+  it('columns signal is subscribable', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.columns.subscribe(fn);
+
+    grid.setColumns([{ id: 'x', header: 'X' }]);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+});
