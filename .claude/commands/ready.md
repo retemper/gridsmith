@@ -29,6 +29,7 @@ gh api /repos/retemper/gridsmith/issues/<number>/sub_issues --jq '.[].number'
 ```
 
 Build a dependency map:
+
 - `parent[child] = parentNumber`
 - `children[parent] = [childNumbers...]`
 
@@ -42,11 +43,13 @@ An issue is **ready** if ALL of the following are true:
 4. It is not an RFC issue (label `rfc`) — RFCs are design docs, not implementation tasks
 
 An issue is **blocked** if:
+
 - Its parent issue is still open (the parent's work must be done first)
 
 ### 4. Prioritize the ready list
 
 Sort ready issues by:
+
 1. Priority label: P0-critical > P1-high > P2-medium > P3-low
 2. Milestone order: M0 > M1 > M2 > M3
 3. Issue number (lower = earlier)
@@ -59,13 +62,13 @@ Show a summary table with milestone filter if `$ARGUMENTS` specifies one (e.g., 
 
 ### Ready Tasks
 
-| # | Title | Priority | Milestone | Labels |
-|---|-------|----------|-----------|--------|
+| #   | Title | Priority | Milestone | Labels |
+| --- | ----- | -------- | --------- | ------ |
 
 ### Blocked Tasks
 
-| # | Title | Blocked by | Reason |
-|---|-------|------------|--------|
+| #   | Title | Blocked by | Reason |
+| --- | ----- | ---------- | ------ |
 
 ### Summary
 
