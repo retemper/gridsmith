@@ -22,12 +22,16 @@ export type { Signal, Computed, ReadonlySignal, Unsubscribe } from './signal';
 export { createEventBus } from './events';
 export type { EventBus, EventHandler } from './events';
 
+// Editing
+export { createEditingPlugin } from './editing';
+
 // Types
 export type {
   CellValue,
   Row,
   ColumnType,
   PinPosition,
+  SelectOption,
   ColumnDef,
   SortDirection,
   SortEntry,
@@ -40,6 +44,9 @@ export type {
   VisibleRange,
   CellChange,
   GridEvents,
+  EditState,
+  EditorDefinition,
+  EditingPluginApi,
   CellDecoration,
   CellDecorator,
   PluginContext,

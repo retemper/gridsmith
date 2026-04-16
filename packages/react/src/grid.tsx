@@ -1,10 +1,13 @@
 import {
   type CellValue,
+  type EditingPluginApi,
+  type EditState,
   type GridInstance,
   type Row,
   type VisibleRange,
   calculateVisibleRange,
   computeColumnLayout,
+  createEditingPlugin,
   getTotalHeight,
   DEFAULT_CONFIG,
 } from '@gridsmith/core';
@@ -19,6 +22,7 @@ import {
   useState,
 } from 'react';
 
+import { CellEditorOverlay } from './cell-editor';
 import type { GridProps } from './types';
 import { useGrid } from './use-grid';
 import { useSignalValue } from './use-signal';
@@ -51,6 +55,12 @@ function buildRowData(grid: GridInstance, viewIndex: number, columnIds: string[]
 
 // ─── Grid Component ────────────────────────────────────────
 
+/** Check if a keydown event is a printable character for type-to-edit. */
+function isPrintableKey(e: KeyboardEvent): boolean {
+  if (e.ctrlKey || e.metaKey || e.altKey) return false;
+  return e.key.length === 1;
+}
+
 export const Grid = memo(function Grid({
   data,
   columns,
@@ -67,7 +77,17 @@ export const Grid = memo(function Grid({
   onFilterChange,
 }: GridProps) {
   const headerHeight = headerHeightProp ?? rowHeight;
-  const grid = useGrid({ data, columns, plugins });
+
+  // Inject editing plugin automatically. `useGrid` creates the grid once
+  // via `useState`, so the plugin list is consumed a single time on mount.
+  // Use a lazy `useState` to make the one-shot nature explicit and avoid
+  // constructing throwaway plugin instances on every render.
+  const [allPlugins] = useState(() => {
+    const editingPlugin = createEditingPlugin();
+    return plugins ? [editingPlugin, ...plugins] : [editingPlugin];
+  });
+
+  const grid = useGrid({ data, columns, plugins: allPlugins });
 
   // ─── Controlled state sync ─────────────────────────────
 
@@ -103,6 +123,42 @@ export const Grid = memo(function Grid({
     if (!onFilterChange) return;
     return grid.subscribe('filter:change', ({ filter }) => onFilterChange(filter));
   }, [grid, onFilterChange]);
+
+  // ─── Editing state ─────────────────────────────────────
+
+  const editingApi = useMemo(() => {
+    const api = grid.getPlugin<EditingPluginApi>('editing');
+    if (!api) throw new Error('Editing plugin not found — this should not happen');
+    return api;
+  }, [grid]);
+
+  const [editState, setEditState] = useState<EditState | null>(null);
+  const [focusedCell, setFocusedCell] = useState<{
+    row: number;
+    col: string;
+    colIndex: number;
+  } | null>(null);
+
+  useEffect(() => {
+    const unsubs = [
+      grid.subscribe('edit:begin', (state) => setEditState({ ...state })),
+      grid.subscribe('edit:commit', () => setEditState(null)),
+      grid.subscribe('edit:cancel', () => setEditState(null)),
+    ];
+    return () => unsubs.forEach((u) => u());
+  }, [grid]);
+
+  // Clear focused cell when sort/filter/data/columns change, since view
+  // indices may no longer refer to the same underlying row.
+  useEffect(() => {
+    const unsubs = [
+      grid.subscribe('sort:change', () => setFocusedCell(null)),
+      grid.subscribe('filter:change', () => setFocusedCell(null)),
+      grid.subscribe('data:rowsUpdate', () => setFocusedCell(null)),
+      grid.subscribe('columns:update', () => setFocusedCell(null)),
+    ];
+    return () => unsubs.forEach((u) => u());
+  }, [grid]);
 
   // ─── Reactive state from core ──────────────────────────
 
@@ -290,7 +346,14 @@ export const Grid = memo(function Grid({
         }
 
         cells.push(
-          <div key={col.id} className={cellClassName} style={cellStyle} {...attrs}>
+          <div
+            key={col.id}
+            className={cellClassName}
+            style={cellStyle}
+            data-row={r}
+            data-col={col.id}
+            {...attrs}
+          >
             {content}
           </div>,
         );
@@ -316,6 +379,158 @@ export const Grid = memo(function Grid({
     return result;
   }, [visibleRange, totalRows, columns, grid, columnLayout, columnIds, rowHeight, dataVersion]);
 
+  // ─── Cell interaction handlers ──────────────────────────
+
+  const parseCellFromTarget = useCallback(
+    (target: EventTarget | null): { row: number; col: string; colIndex: number } | null => {
+      const el = (target as HTMLElement | null)?.closest?.('.gs-cell') as HTMLElement | null;
+      if (!el) return null;
+      const row = Number(el.dataset.row);
+      const col = el.dataset.col;
+      if (col == null || Number.isNaN(row)) return null;
+      const colIndex = currentColumns.findIndex((c) => c.id === col);
+      if (colIndex === -1) return null;
+      return { row, col, colIndex };
+    },
+    [currentColumns],
+  );
+
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent) => {
+      const cell = parseCellFromTarget(e.target);
+      if (!cell) return;
+      const colDef = currentColumns[cell.colIndex];
+      if (!colDef || colDef.editable === false) return;
+
+      const editorType = colDef.editor ?? colDef.type ?? 'text';
+      if (editorType === 'checkbox') {
+        // Checkbox: toggle on double-click
+        const current = grid.getCell(cell.row, cell.col);
+        grid.setCell(cell.row, cell.col, !current);
+      } else {
+        editingApi.beginEdit(cell.row, cell.col);
+      }
+      setFocusedCell(cell);
+    },
+    [parseCellFromTarget, currentColumns, editingApi, grid],
+  );
+
+  const handleCellClick = useCallback(
+    (e: React.MouseEvent) => {
+      const cell = parseCellFromTarget(e.target);
+      if (!cell) return;
+
+      // If clicking a different cell while editing, commit current edit
+      if (editState && (editState.rowIndex !== cell.row || editState.columnId !== cell.col)) {
+        editingApi.commitEdit();
+      }
+
+      setFocusedCell(cell);
+
+      // Checkbox: toggle on single click
+      const colDef = currentColumns[cell.colIndex];
+      if (colDef && colDef.editable !== false) {
+        const editorType = colDef.editor ?? colDef.type ?? 'text';
+        if (editorType === 'checkbox') {
+          const current = grid.getCell(cell.row, cell.col);
+          grid.setCell(cell.row, cell.col, !current);
+        }
+      }
+    },
+    [parseCellFromTarget, editState, editingApi, currentColumns, grid],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      // If currently editing, the editor handles its own keys
+      if (editState) return;
+
+      if (!focusedCell) return;
+
+      if (e.key === 'F2') {
+        e.preventDefault();
+        editingApi.beginEdit(focusedCell.row, focusedCell.col);
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const colDef = currentColumns[focusedCell.colIndex];
+        if (colDef && colDef.editable !== false) {
+          const editorType = colDef.editor ?? colDef.type ?? 'text';
+          if (editorType === 'checkbox') {
+            const current = grid.getCell(focusedCell.row, focusedCell.col);
+            grid.setCell(focusedCell.row, focusedCell.col, !current);
+          } else {
+            editingApi.beginEdit(focusedCell.row, focusedCell.col);
+          }
+        }
+        return;
+      }
+
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault();
+        const colDef = currentColumns[focusedCell.colIndex];
+        if (colDef && colDef.editable !== false) {
+          grid.setCell(focusedCell.row, focusedCell.col, null);
+        }
+        return;
+      }
+
+      // Type-to-edit: printable character starts editing
+      if (isPrintableKey(e.nativeEvent)) {
+        const colDef = currentColumns[focusedCell.colIndex];
+        if (colDef && colDef.editable !== false) {
+          const editorType = colDef.editor ?? colDef.type ?? 'text';
+          if (editorType === 'checkbox' || editorType === 'select') return;
+          // For number editors, only start editing on characters that can
+          // begin a number literal. Otherwise a stray letter would wipe the
+          // cell to null on commit.
+          if (editorType === 'number' && !/^[-0-9.]$/.test(e.key)) return;
+          e.preventDefault();
+          editingApi.beginEdit(focusedCell.row, focusedCell.col, e.key);
+        }
+      }
+    },
+    [editState, focusedCell, currentColumns, editingApi, grid],
+  );
+
+  // ─── Editor overlay ───────────────────────────────────
+
+  const editorOverlay = useMemo(() => {
+    if (!editState) return null;
+
+    const colIndex = currentColumns.findIndex((c) => c.id === editState.columnId);
+    if (colIndex === -1) return null;
+
+    const editorStyle: CSSProperties = {
+      position: 'absolute',
+      top: editState.rowIndex * rowHeight,
+      left: columnLayout.offsets[colIndex],
+      width: columnLayout.widths[colIndex],
+      height: rowHeight,
+      zIndex: 10,
+      boxSizing: 'border-box',
+      display: 'flex',
+      alignItems: 'stretch',
+    };
+
+    return (
+      <CellEditorOverlay
+        // Remount editor on every new edit so local input state resets.
+        key={`${editState.rowIndex}:${editState.columnId}`}
+        grid={grid}
+        editingApi={editingApi}
+        columns={columns}
+        columnIndex={colIndex}
+        rowIndex={editState.rowIndex}
+        editValue={editState.value}
+        columnId={editState.columnId}
+        style={editorStyle}
+      />
+    );
+  }, [editState, currentColumns, columnLayout, rowHeight, grid, editingApi, columns]);
+
   // ─── JSX ───────────────────────────────────────────────
 
   return (
@@ -327,6 +542,8 @@ export const Grid = memo(function Grid({
         display: 'flex',
         flexDirection: 'column',
       }}
+      tabIndex={0}
+      onKeyDown={handleKeyDown}
     >
       <div
         className="gs-header"
@@ -355,6 +572,8 @@ export const Grid = memo(function Grid({
           overflow: 'auto',
           flex: 1,
         }}
+        onClick={handleCellClick}
+        onDoubleClick={handleDoubleClick}
       >
         <div
           className="gs-canvas"
@@ -365,6 +584,7 @@ export const Grid = memo(function Grid({
           }}
         >
           {rowElements}
+          {editorOverlay}
         </div>
       </div>
     </div>
