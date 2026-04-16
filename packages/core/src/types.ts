@@ -18,6 +18,13 @@ export interface SelectOption {
   value: string | number;
 }
 
+/**
+ * Custom comparator for sorting a column. Must return a negative, zero, or
+ * positive number like `Array.prototype.sort`. Direction (asc/desc) is applied
+ * on top of the comparator's result by the core.
+ */
+export type CellComparator = (a: CellValue, b: CellValue) => number;
+
 export interface ColumnDef {
   id: string;
   header: string;
@@ -36,6 +43,8 @@ export interface ColumnDef {
   editor?: string;
   /** Options for select-type editors */
   selectOptions?: SelectOption[];
+  /** Custom comparator for sorting this column. Overrides the default. */
+  comparator?: CellComparator;
 }
 
 // ─── Sort & Filter ─────────────────────────────────────────
@@ -45,14 +54,25 @@ export type SortDirection = 'asc' | 'desc';
 export interface SortEntry {
   columnId: string;
   direction: SortDirection;
+  /** Per-sort comparator override; takes precedence over column comparator. */
+  comparator?: CellComparator;
 }
 
 export type SortState = SortEntry[];
 
+/**
+ * Filter value.
+ * - `between` expects a 2-tuple `[min, max]` (inclusive on both ends).
+ * - `in` / `notIn` expect an array of candidate values.
+ * - `regex` accepts either a `RegExp` instance or a string pattern.
+ * - All other operators expect a single `CellValue`.
+ */
+export type FilterValue = CellValue | readonly CellValue[] | RegExp;
+
 export interface FilterEntry {
   columnId: string;
   operator: FilterOperator;
-  value: CellValue;
+  value: FilterValue;
 }
 
 export type FilterOperator =
@@ -62,9 +82,13 @@ export type FilterOperator =
   | 'gte'
   | 'lt'
   | 'lte'
+  | 'between'
   | 'contains'
   | 'startsWith'
-  | 'endsWith';
+  | 'endsWith'
+  | 'regex'
+  | 'in'
+  | 'notIn';
 
 export type FilterState = FilterEntry[];
 

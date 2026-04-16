@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { buildIndexMap } from './index-map';
-import type { Row } from './types';
+import type { ColumnDef, Row } from './types';
 
 const data: Row[] = [
   { name: 'Alice', age: 30, city: 'Seoul' },
@@ -181,6 +181,148 @@ describe('buildIndexMap', () => {
       expect(map.length).toBe(2);
       expect(map.viewToData(0)).toBe(2); // Charlie 35
       expect(map.viewToData(1)).toBe(0); // Alice 30
+    });
+  });
+
+  describe('filter: extended operators', () => {
+    it('filters by regex (string pattern)', () => {
+      const map = buildIndexMap(data, [], [{ columnId: 'name', operator: 'regex', value: '^A' }]);
+      expect(map.length).toBe(1);
+      expect(map.viewToData(0)).toBe(0); // Alice
+    });
+
+    it('filters by regex (RegExp instance)', () => {
+      const map = buildIndexMap(data, [], [{ columnId: 'name', operator: 'regex', value: /li/i }]);
+      expect(map.length).toBe(2); // Alice, Charlie
+    });
+
+    it('invalid regex pattern matches nothing without throwing', () => {
+      const map = buildIndexMap(data, [], [{ columnId: 'name', operator: 'regex', value: '[' }]);
+      expect(map.length).toBe(0);
+    });
+
+    it('filters numbers by between (inclusive)', () => {
+      const map = buildIndexMap(
+        data,
+        [],
+        [{ columnId: 'age', operator: 'between', value: [26, 35] }],
+      );
+      expect(map.length).toBe(2); // Alice 30, Charlie 35
+    });
+
+    it('between with invalid range (missing bound) matches nothing', () => {
+      const map = buildIndexMap(
+        data,
+        [],
+        [{ columnId: 'age', operator: 'between', value: [null, 35] }],
+      );
+      expect(map.length).toBe(0);
+    });
+
+    it('filters dates by before/after (lt/gt) and between', () => {
+      const dated: Row[] = [
+        { id: 1, when: new Date('2024-01-10') },
+        { id: 2, when: new Date('2024-02-15') },
+        { id: 3, when: new Date('2024-03-20') },
+      ];
+      const before = buildIndexMap(
+        dated,
+        [],
+        [{ columnId: 'when', operator: 'lt', value: new Date('2024-02-01') }],
+      );
+      expect(before.length).toBe(1); // Jan 10
+
+      const after = buildIndexMap(
+        dated,
+        [],
+        [{ columnId: 'when', operator: 'gt', value: new Date('2024-02-01') }],
+      );
+      expect(after.length).toBe(2); // Feb 15, Mar 20
+
+      const range = buildIndexMap(
+        dated,
+        [],
+        [
+          {
+            columnId: 'when',
+            operator: 'between',
+            value: [new Date('2024-02-01'), new Date('2024-03-01')],
+          },
+        ],
+      );
+      expect(range.length).toBe(1); // Feb 15 only
+    });
+
+    it('filters by in / notIn (select includes/excludes)', () => {
+      const inMap = buildIndexMap(
+        data,
+        [],
+        [{ columnId: 'city', operator: 'in', value: ['Seoul', 'Paris'] }],
+      );
+      expect(inMap.length).toBe(2); // Alice, Charlie
+
+      const notInMap = buildIndexMap(
+        data,
+        [],
+        [{ columnId: 'city', operator: 'notIn', value: ['Seoul'] }],
+      );
+      expect(notInMap.length).toBe(1);
+      expect(notInMap.viewToData(0)).toBe(1); // Bob
+    });
+
+    it('in matches null when candidates include null', () => {
+      const withNulls: Row[] = [
+        { name: 'Alice', city: null },
+        { name: 'Bob', city: 'Seoul' },
+      ];
+      const map = buildIndexMap(
+        withNulls,
+        [],
+        [{ columnId: 'city', operator: 'in', value: [null, 'Paris'] }],
+      );
+      expect(map.length).toBe(1);
+      expect(map.viewToData(0)).toBe(0);
+    });
+  });
+
+  describe('sort: custom comparators', () => {
+    const rows: Row[] = [
+      { id: 1, label: 'b2' },
+      { id: 2, label: 'a10' },
+      { id: 3, label: 'a2' },
+    ];
+
+    it('uses column-level comparator when provided', () => {
+      // Natural / numeric-aware comparator so "a2" sorts before "a10".
+      const natural = (a: unknown, b: unknown) =>
+        String(a).localeCompare(String(b), undefined, { numeric: true });
+
+      const columns: ColumnDef[] = [
+        { id: 'id', header: 'ID' },
+        { id: 'label', header: 'Label', comparator: natural },
+      ];
+      const map = buildIndexMap(rows, [{ columnId: 'label', direction: 'asc' }], [], columns);
+      expect(map.viewToData(0)).toBe(2); // a2
+      expect(map.viewToData(1)).toBe(1); // a10
+      expect(map.viewToData(2)).toBe(0); // b2
+    });
+
+    it('entry-level comparator overrides column-level', () => {
+      const alpha = (a: unknown, b: unknown) => String(a).localeCompare(String(b));
+      // Column comparator reverses; entry comparator restores natural ascending.
+      const columns: ColumnDef[] = [
+        { id: 'label', header: 'L', comparator: (a, b) => -alpha(a, b) },
+      ];
+      const map = buildIndexMap(
+        rows,
+        [{ columnId: 'label', direction: 'asc', comparator: alpha }],
+        [],
+        columns,
+      );
+      // With plain alphabetical comparator, "a10" < "a2" < "b2"
+      expect(map.viewToData(0)).toBe(1); // a10
+      expect(map.viewToData(1)).toBe(2); // a2
+      expect(map.viewToData(2)).toBe(0); // b2
     });
   });
 
