@@ -17,9 +17,21 @@ export interface CellRendererProps {
   column: GridColumnDef;
 }
 
+/** Props passed to custom cell editor components. */
+export interface CellEditorProps {
+  value: CellValue;
+  row: Row;
+  rowIndex: number;
+  column: GridColumnDef;
+  commit: (value: CellValue) => void;
+  cancel: () => void;
+}
+
 /** Extended column definition with React-specific fields. */
 export interface GridColumnDef extends ColumnDef {
   cellRenderer?: (props: CellRendererProps) => ReactNode;
+  /** Custom React editor component for this column. */
+  cellEditor?: (props: CellEditorProps) => ReactNode;
 }
 
 /** Props for the Grid component. */

@@ -13,6 +13,11 @@ export type ColumnType = 'text' | 'number' | 'date' | 'select' | 'checkbox';
 
 export type PinPosition = 'left' | 'right' | false;
 
+export interface SelectOption {
+  label: string;
+  value: string | number;
+}
+
 export interface ColumnDef {
   id: string;
   header: string;
@@ -25,6 +30,12 @@ export interface ColumnDef {
   filterable?: boolean;
   resizable?: boolean;
   visible?: boolean;
+  /** Whether this column is editable (default: true) */
+  editable?: boolean;
+  /** Editor type name — defaults to column `type` or 'text' */
+  editor?: string;
+  /** Options for select-type editors */
+  selectOptions?: SelectOption[];
 }
 
 // ─── Sort & Filter ─────────────────────────────────────────
@@ -99,9 +110,43 @@ export interface GridEvents {
   'sort:change': { sort: SortState };
   'filter:change': { filter: FilterState };
   'viewport:change': { viewport: ViewportState };
+  'edit:begin': EditState;
+  'edit:commit': {
+    rowIndex: number;
+    columnId: string;
+    oldValue: CellValue;
+    newValue: CellValue;
+  };
+  'edit:cancel': { rowIndex: number; columnId: string };
   'plugin:ready': { name: string };
   ready: undefined;
   destroy: undefined;
+}
+
+// ─── Editing ──────────────────────────────────────────────
+
+export interface EditState {
+  rowIndex: number;
+  columnId: string;
+  value: CellValue;
+  originalValue: CellValue;
+}
+
+export interface EditorDefinition {
+  name: string;
+  parse?: (raw: string) => CellValue;
+  format?: (value: CellValue) => string;
+}
+
+export interface EditingPluginApi {
+  beginEdit(rowIndex: number, columnId: string, initialChar?: string): boolean;
+  commitEdit(): boolean;
+  cancelEdit(): void;
+  getEditState(): EditState | null;
+  isEditing(): boolean;
+  defineEditor(def: EditorDefinition): void;
+  getEditor(name: string): EditorDefinition | undefined;
+  setValue(value: CellValue): void;
 }
 
 // ─── Plugin ────────────────────────────────────────────────
