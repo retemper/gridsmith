@@ -61,6 +61,23 @@ function isPrintableKey(e: KeyboardEvent): boolean {
   return e.key.length === 1;
 }
 
+/**
+ * Navigation key set handled by the grid root when no editor is active. When
+ * the key matches, the grid owns it (preventDefault + focus update); otherwise
+ * the key falls through to existing editing-entry handling (F2, Enter, etc.).
+ */
+const NAV_KEYS: ReadonlySet<string> = new Set([
+  'ArrowUp',
+  'ArrowDown',
+  'ArrowLeft',
+  'ArrowRight',
+  'Home',
+  'End',
+  'PageUp',
+  'PageDown',
+  'Tab',
+]);
+
 export const Grid = memo(function Grid({
   data,
   columns,
@@ -345,6 +362,13 @@ export const Grid = memo(function Grid({
           if (dec.attributes) Object.assign(attrs, dec.attributes);
         }
 
+        // Keyboard focus indicator — purely visual, consumers can restyle via
+        // `.gs-cell--focused`. Not a core decoration because focus is an
+        // adapter-level concern tied to the Grid component's React state.
+        if (focusedCell && focusedCell.row === r && focusedCell.col === col.id) {
+          cellClassName += ' gs-cell--focused';
+        }
+
         cells.push(
           <div
             key={col.id}
@@ -377,7 +401,17 @@ export const Grid = memo(function Grid({
     }
 
     return result;
-  }, [visibleRange, totalRows, columns, grid, columnLayout, columnIds, rowHeight, dataVersion]);
+  }, [
+    visibleRange,
+    totalRows,
+    columns,
+    grid,
+    columnLayout,
+    columnIds,
+    rowHeight,
+    dataVersion,
+    focusedCell,
+  ]);
 
   // ─── Cell interaction handlers ──────────────────────────
 
@@ -440,12 +474,177 @@ export const Grid = memo(function Grid({
     [parseCellFromTarget, editState, editingApi, currentColumns, grid],
   );
 
+  // ─── Navigation helpers ────────────────────────────────
+
+  /** Ordered list of visible column indices. Hidden columns are skipped
+   *  during navigation so arrow keys never land on an invisible cell. */
+  const visibleColIndices = useMemo(() => {
+    const out: number[] = [];
+    for (let i = 0; i < currentColumns.length; i++) {
+      if (currentColumns[i].visible !== false) out.push(i);
+    }
+    return out;
+  }, [currentColumns]);
+
+  const scrollFocusIntoView = useCallback(
+    (row: number, colIndex: number) => {
+      const el = viewportRef.current;
+      if (!el) return;
+      const cellTop = row * rowHeight;
+      const cellBottom = cellTop + rowHeight;
+      const cellLeft = columnLayout.offsets[colIndex] ?? 0;
+      const cellRight = cellLeft + (columnLayout.widths[colIndex] ?? 0);
+
+      if (cellTop < el.scrollTop) el.scrollTop = cellTop;
+      else if (cellBottom > el.scrollTop + el.clientHeight) {
+        el.scrollTop = cellBottom - el.clientHeight;
+      }
+
+      if (cellLeft < el.scrollLeft) el.scrollLeft = cellLeft;
+      else if (cellRight > el.scrollLeft + el.clientWidth) {
+        el.scrollLeft = cellRight - el.clientWidth;
+      }
+    },
+    [columnLayout, rowHeight],
+  );
+
+  const moveFocusTo = useCallback(
+    (row: number, colIndex: number) => {
+      if (totalRows === 0 || visibleColIndices.length === 0) return;
+      const clampedRow = Math.max(0, Math.min(totalRows - 1, row));
+      // colIndex must be one of the visible indices — callers compute from
+      // `visibleColIndices`, but clamp defensively.
+      const clampedCol =
+        visibleColIndices.indexOf(colIndex) === -1 ? (visibleColIndices[0] ?? 0) : colIndex;
+      const col = currentColumns[clampedCol];
+      if (!col) return;
+      setFocusedCell({ row: clampedRow, col: col.id, colIndex: clampedCol });
+      scrollFocusIntoView(clampedRow, clampedCol);
+    },
+    [totalRows, visibleColIndices, currentColumns, scrollFocusIntoView],
+  );
+
+  /**
+   * Return the visible column index one step left/right of the given one.
+   * If no such column exists, return `null` (caller decides whether to wrap
+   * to another row).
+   */
+  const stepVisibleCol = useCallback(
+    (colIndex: number, delta: 1 | -1): number | null => {
+      const pos = visibleColIndices.indexOf(colIndex);
+      if (pos === -1) return null;
+      const next = pos + delta;
+      if (next < 0 || next >= visibleColIndices.length) return null;
+      return visibleColIndices[next];
+    },
+    [visibleColIndices],
+  );
+
+  const firstVisibleColIndex = visibleColIndices[0] ?? 0;
+  const lastVisibleColIndex = visibleColIndices[visibleColIndices.length - 1] ?? 0;
+
+  const handleCommitAndMoveVertical = useCallback(
+    (shift: boolean) => {
+      // Resolve the *edited* cell, not `focusedCell` — Tab inside the editor
+      // advances `editState` without touching `focusedCell`, so the two can
+      // diverge. Using the edit target keeps Enter's "move down" relative to
+      // the cell the user was actually editing.
+      const state = editingApi.getEditState();
+      editingApi.commitEdit();
+      if (!state) return;
+      const colIndex = currentColumns.findIndex((c) => c.id === state.columnId);
+      if (colIndex === -1) return;
+      const delta = shift ? -1 : 1;
+      moveFocusTo(state.rowIndex + delta, colIndex);
+    },
+    [editingApi, currentColumns, moveFocusTo],
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       // If currently editing, the editor handles its own keys
       if (editState) return;
 
       if (!focusedCell) return;
+
+      const { row, colIndex } = focusedCell;
+      const lastRow = totalRows - 1;
+      const mod = e.ctrlKey || e.metaKey;
+
+      // ─── Pure navigation keys ────────────────────────
+      if (NAV_KEYS.has(e.key)) {
+        e.preventDefault();
+        switch (e.key) {
+          case 'ArrowUp': {
+            moveFocusTo(mod ? 0 : row - 1, colIndex);
+            return;
+          }
+          case 'ArrowDown': {
+            moveFocusTo(mod ? lastRow : row + 1, colIndex);
+            return;
+          }
+          case 'ArrowLeft': {
+            if (mod) {
+              moveFocusTo(row, firstVisibleColIndex);
+            } else {
+              const next = stepVisibleCol(colIndex, -1);
+              if (next !== null) moveFocusTo(row, next);
+            }
+            return;
+          }
+          case 'ArrowRight': {
+            if (mod) {
+              moveFocusTo(row, lastVisibleColIndex);
+            } else {
+              const next = stepVisibleCol(colIndex, 1);
+              if (next !== null) moveFocusTo(row, next);
+            }
+            return;
+          }
+          case 'Home': {
+            moveFocusTo(mod ? 0 : row, firstVisibleColIndex);
+            return;
+          }
+          case 'End': {
+            moveFocusTo(mod ? lastRow : row, lastVisibleColIndex);
+            return;
+          }
+          case 'PageDown': {
+            const el = viewportRef.current;
+            const pageSize = el ? Math.max(1, Math.floor(el.clientHeight / rowHeight)) : 1;
+            moveFocusTo(row + pageSize, colIndex);
+            return;
+          }
+          case 'PageUp': {
+            const el = viewportRef.current;
+            const pageSize = el ? Math.max(1, Math.floor(el.clientHeight / rowHeight)) : 1;
+            moveFocusTo(row - pageSize, colIndex);
+            return;
+          }
+          case 'Tab': {
+            // Tab wraps within the row; at boundaries it moves to the next/
+            // previous row's last/first cell.
+            if (e.shiftKey) {
+              const prev = stepVisibleCol(colIndex, -1);
+              if (prev !== null) moveFocusTo(row, prev);
+              else if (row > 0) moveFocusTo(row - 1, lastVisibleColIndex);
+            } else {
+              const next = stepVisibleCol(colIndex, 1);
+              if (next !== null) moveFocusTo(row, next);
+              else if (row < lastRow) moveFocusTo(row + 1, firstVisibleColIndex);
+            }
+            return;
+          }
+        }
+      }
+
+      // Shift+Enter in nav mode = move up (Enter without shift preserves the
+      // "begin edit" behavior users expect from the current grid).
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        moveFocusTo(row - 1, colIndex);
+        return;
+      }
 
       if (e.key === 'F2') {
         e.preventDefault();
@@ -492,7 +691,19 @@ export const Grid = memo(function Grid({
         }
       }
     },
-    [editState, focusedCell, currentColumns, editingApi, grid],
+    [
+      editState,
+      focusedCell,
+      totalRows,
+      currentColumns,
+      editingApi,
+      grid,
+      moveFocusTo,
+      stepVisibleCol,
+      firstVisibleColIndex,
+      lastVisibleColIndex,
+      rowHeight,
+    ],
   );
 
   // ─── Editor overlay ───────────────────────────────────
@@ -527,9 +738,19 @@ export const Grid = memo(function Grid({
         editValue={editState.value}
         columnId={editState.columnId}
         style={editorStyle}
+        onCommitAndMoveVertical={handleCommitAndMoveVertical}
       />
     );
-  }, [editState, currentColumns, columnLayout, rowHeight, grid, editingApi, columns]);
+  }, [
+    editState,
+    currentColumns,
+    columnLayout,
+    rowHeight,
+    grid,
+    editingApi,
+    columns,
+    handleCommitAndMoveVertical,
+  ]);
 
   // ─── JSX ───────────────────────────────────────────────
 
