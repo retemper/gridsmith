@@ -1,19 +1,60 @@
-import type { CellValue, FilterEntry, FilterState, IndexMap, Row, SortState } from './types';
+import type {
+  CellComparator,
+  CellValue,
+  ColumnDef,
+  FilterEntry,
+  FilterState,
+  IndexMap,
+  Row,
+  SortState,
+} from './types';
 
-function compareValues(a: CellValue, b: CellValue): number {
+function defaultCompare(a: CellValue, b: CellValue): number {
   if (a == null && b == null) return 0;
   if (a == null) return -1;
   if (b == null) return 1;
+  // Dates: compare by timestamp to avoid falling through to lexicographic
+  // comparison of `toString()` output (which is locale-dependent for Date).
+  if (a instanceof Date && b instanceof Date) {
+    return a.getTime() - b.getTime();
+  }
   if (a < b) return -1;
   if (a > b) return 1;
   return 0;
 }
 
-function matchesFilter(value: CellValue, filter: FilterEntry): boolean {
+function asArray(v: unknown): readonly CellValue[] {
+  return Array.isArray(v) ? (v as readonly CellValue[]) : [];
+}
+
+/**
+ * Per-row predicate evaluation. `regex` callers must pre-compile the pattern
+ * and pass it via `compiledRegex` — compiling inside this function runs once
+ * per row per filter, which is unacceptable at 1M-row scale.
+ */
+function matchesFilter(
+  value: CellValue,
+  filter: FilterEntry,
+  compiledRegex: RegExp | null,
+): boolean {
   const { operator, value: filterValue } = filter;
 
+  // `eq` against null and `in`/`notIn` semantics need to handle null values
+  // explicitly; other operators short-circuit to "no match" when the cell is
+  // null to avoid surprising coercions.
   if (value == null) {
-    return operator === 'eq' && filterValue == null;
+    switch (operator) {
+      case 'eq':
+        return filterValue == null;
+      case 'neq':
+        return filterValue != null;
+      case 'in':
+        return asArray(filterValue).some((v) => v == null);
+      case 'notIn':
+        return !asArray(filterValue).some((v) => v == null);
+      default:
+        return false;
+    }
   }
 
   switch (operator) {
@@ -22,21 +63,46 @@ function matchesFilter(value: CellValue, filter: FilterEntry): boolean {
     case 'neq':
       return value !== filterValue;
     case 'gt':
-      return compareValues(value, filterValue) > 0;
+      return defaultCompare(value, filterValue as CellValue) > 0;
     case 'gte':
-      return compareValues(value, filterValue) >= 0;
+      return defaultCompare(value, filterValue as CellValue) >= 0;
     case 'lt':
-      return compareValues(value, filterValue) < 0;
+      return defaultCompare(value, filterValue as CellValue) < 0;
     case 'lte':
-      return compareValues(value, filterValue) <= 0;
+      return defaultCompare(value, filterValue as CellValue) <= 0;
+    case 'between': {
+      const range = asArray(filterValue);
+      if (range.length < 2) return false;
+      const [min, max] = range as [CellValue, CellValue];
+      if (min == null || max == null) return false;
+      return defaultCompare(value, min) >= 0 && defaultCompare(value, max) <= 0;
+    }
     case 'contains':
       return String(value).includes(String(filterValue));
     case 'startsWith':
       return String(value).startsWith(String(filterValue));
     case 'endsWith':
       return String(value).endsWith(String(filterValue));
+    case 'regex':
+      // Invalid or missing pattern ⇒ no matches. Never throws — filter state
+      // should not be able to crash the grid.
+      return compiledRegex != null && compiledRegex.test(String(value));
+    case 'in':
+      return asArray(filterValue).some((v) => v === value);
+    case 'notIn':
+      return !asArray(filterValue).some((v) => v === value);
     default:
       return true;
+  }
+}
+
+function compileRegex(value: FilterEntry['value']): RegExp | null {
+  if (value instanceof RegExp) return value;
+  if (typeof value !== 'string') return null;
+  try {
+    return new RegExp(value);
+  } catch {
+    return null;
   }
 }
 
@@ -44,27 +110,40 @@ export function buildIndexMap(
   data: Row[],
   sortState: SortState,
   filterState: FilterState,
+  columns?: readonly ColumnDef[],
 ): IndexMap {
   // 1. Filter: collect indices of rows that pass all filters
   let indices = Array.from({ length: data.length }, (_, i) => i);
 
   if (filterState.length > 0) {
+    // Pre-compile regex patterns once. `matchesFilter` runs O(rows × filters),
+    // so recompiling per row turns the 1M-row benchmark into a cliff.
+    const compiledRegex: (RegExp | null)[] = filterState.map((f) =>
+      f.operator === 'regex' ? compileRegex(f.value) : null,
+    );
     indices = indices.filter((dataIndex) => {
       const row = data[dataIndex];
       if (!row) return false;
-      return filterState.every((f) => matchesFilter(row[f.columnId], f));
+      return filterState.every((f, i) => matchesFilter(row[f.columnId], f, compiledRegex[i]));
     });
   }
 
-  // 2. Sort
+  // 2. Sort — resolve per-column comparators once, then apply in order.
   if (sortState.length > 0) {
+    const comparators: CellComparator[] = sortState.map((entry) => {
+      if (entry.comparator) return entry.comparator;
+      const col = columns?.find((c) => c.id === entry.columnId);
+      return col?.comparator ?? defaultCompare;
+    });
+
     indices.sort((a, b) => {
       const rowA = data[a];
       const rowB = data[b];
       if (!rowA || !rowB) return 0;
 
-      for (const entry of sortState) {
-        const cmp = compareValues(rowA[entry.columnId], rowB[entry.columnId]);
+      for (let i = 0; i < sortState.length; i++) {
+        const entry = sortState[i];
+        const cmp = comparators[i](rowA[entry.columnId], rowB[entry.columnId]);
         if (cmp !== 0) {
           return entry.direction === 'desc' ? -cmp : cmp;
         }

@@ -2,6 +2,7 @@ import {
   type CellValue,
   type EditingPluginApi,
   type EditState,
+  type FilterEntry,
   type GridInstance,
   type Row,
   type VisibleRange,
@@ -23,6 +24,8 @@ import {
 } from 'react';
 
 import { CellEditorOverlay } from './cell-editor';
+import { FilterPopover } from './filter-popover';
+import { cycleSortState } from './header-sort';
 import type { GridProps } from './types';
 import { useGrid } from './use-grid';
 import { useSignalValue } from './use-signal';
@@ -180,6 +183,8 @@ export const Grid = memo(function Grid({
   // ─── Reactive state from core ──────────────────────────
 
   const currentColumns = useSignalValue(grid.columns);
+  const currentSort = useSignalValue(grid.sortState);
+  const currentFilter = useSignalValue(grid.filterState);
   const indexMap = useSignalValue(grid.indexMap);
   const totalRows = indexMap.length;
 
@@ -284,16 +289,65 @@ export const Grid = memo(function Grid({
     updateRange();
   }, [totalRows, columnLayout, updateRange]);
 
+  // ─── Sort / Filter interaction ─────────────────────────
+
+  const [openFilterCol, setOpenFilterCol] = useState<string | null>(null);
+
+  const handleHeaderSortClick = useCallback(
+    (columnId: string, shift: boolean) => {
+      const col = currentColumns.find((c) => c.id === columnId);
+      if (!col || col.sortable === false) return;
+      const next = cycleSortState(grid.sortState.get(), columnId, shift);
+      grid.sortState.set(next);
+    },
+    [currentColumns, grid],
+  );
+
+  const handleFilterApply = useCallback(
+    (columnId: string, entry: FilterEntry | null) => {
+      const prev = grid.filterState.get();
+      const others = prev.filter((f) => f.columnId !== columnId);
+      const next = entry ? [...others, entry] : others;
+      grid.filterState.set(next);
+      setOpenFilterCol(null);
+    },
+    [grid],
+  );
+
+  // Maps for quick indicator rendering.
+  const sortIndexByCol = useMemo(() => {
+    const m = new Map<string, { direction: 'asc' | 'desc'; index: number }>();
+    currentSort.forEach((e, i) => m.set(e.columnId, { direction: e.direction, index: i }));
+    return m;
+  }, [currentSort]);
+
+  const filterByCol = useMemo(() => {
+    const m = new Map<string, FilterEntry>();
+    currentFilter.forEach((e) => m.set(e.columnId, e));
+    return m;
+  }, [currentFilter]);
+
   // ─── Render header ─────────────────────────────────────
 
   const headerCells = useMemo(
     () =>
       currentColumns.map((col, i) => {
         if (col.visible === false) return null;
+        const sortInfo = sortIndexByCol.get(col.id);
+        const hasFilter = filterByCol.has(col.id);
+        const sortable = col.sortable !== false;
+        const filterable = col.filterable !== false;
+        const isMulti = currentSort.length > 1;
+
         return (
           <div
             key={col.id}
-            className="gs-header-cell"
+            className={`gs-header-cell${sortable ? ' gs-header-cell--sortable' : ''}`}
+            role="columnheader"
+            aria-sort={
+              sortInfo ? (sortInfo.direction === 'asc' ? 'ascending' : 'descending') : 'none'
+            }
+            data-col={col.id}
             style={{
               position: 'absolute',
               left: columnLayout.offsets[i],
@@ -301,14 +355,99 @@ export const Grid = memo(function Grid({
               height: headerHeight,
               boxSizing: 'border-box',
               overflow: 'hidden',
+              display: 'flex',
+              alignItems: 'center',
+              userSelect: 'none',
             }}
           >
-            {col.header}
+            <button
+              type="button"
+              className="gs-header-label"
+              disabled={!sortable}
+              onClick={(e) => {
+                if (!sortable) return;
+                handleHeaderSortClick(col.id, e.shiftKey);
+              }}
+              style={{
+                flex: 1,
+                textAlign: 'left',
+                background: 'transparent',
+                border: 'none',
+                padding: '0 6px',
+                height: '100%',
+                cursor: sortable ? 'pointer' : 'default',
+                font: 'inherit',
+                color: 'inherit',
+              }}
+            >
+              {col.header}
+              {sortInfo ? (
+                <span className="gs-header-sort-indicator" aria-hidden="true">
+                  {' '}
+                  {sortInfo.direction === 'asc' ? '▲' : '▼'}
+                  {isMulti ? <sub>{sortInfo.index + 1}</sub> : null}
+                </span>
+              ) : null}
+            </button>
+            {filterable ? (
+              <button
+                type="button"
+                className={`gs-header-filter-btn${hasFilter ? ' gs-header-filter-btn--active' : ''}`}
+                aria-label={`Filter ${col.header}`}
+                aria-haspopup="dialog"
+                aria-expanded={openFilterCol === col.id}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenFilterCol((cur) => (cur === col.id ? null : col.id));
+                }}
+                style={{
+                  border: 'none',
+                  background: 'transparent',
+                  cursor: 'pointer',
+                  padding: '0 6px',
+                  height: '100%',
+                  color: hasFilter ? '#1a66ff' : 'inherit',
+                  font: 'inherit',
+                }}
+              >
+                ⚲
+              </button>
+            ) : null}
           </div>
         );
       }),
-    [currentColumns, columnLayout, headerHeight],
+    [
+      currentColumns,
+      columnLayout,
+      headerHeight,
+      sortIndexByCol,
+      filterByCol,
+      currentSort.length,
+      handleHeaderSortClick,
+      openFilterCol,
+    ],
   );
+
+  // ─── Filter popover ────────────────────────────────────
+
+  const filterPopover = useMemo(() => {
+    if (!openFilterCol) return null;
+    const colIndex = currentColumns.findIndex((c) => c.id === openFilterCol);
+    if (colIndex === -1) return null;
+    const col = currentColumns[colIndex];
+    if (!col) return null;
+    const entry = filterByCol.get(col.id) ?? null;
+    const left = columnLayout.offsets[colIndex] ?? 0;
+    return (
+      <FilterPopover
+        column={col}
+        entry={entry}
+        style={{ top: headerHeight, left }}
+        onApply={(e) => handleFilterApply(col.id, e)}
+        onClose={() => setOpenFilterCol(null)}
+      />
+    );
+  }, [openFilterCol, currentColumns, filterByCol, columnLayout, headerHeight, handleFilterApply]);
 
   // ─── Render rows ───────────────────────────────────────
 
@@ -769,9 +908,11 @@ export const Grid = memo(function Grid({
       <div
         className="gs-header"
         style={{
+          // `overflow: visible` so the filter popover (which anchors at the
+          // header cell's left edge and drops below `headerHeight`) is not
+          // clipped by the header element's bounding box.
           position: 'relative',
           height: headerHeight,
-          overflow: 'hidden',
           flexShrink: 0,
         }}
       >
@@ -780,9 +921,11 @@ export const Grid = memo(function Grid({
           style={{
             position: 'relative',
             width: columnLayout.totalWidth,
+            height: headerHeight,
           }}
         >
           {headerCells}
+          {filterPopover}
         </div>
       </div>
       <div

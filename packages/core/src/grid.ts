@@ -33,7 +33,7 @@ export function createGrid(options: GridOptions): GridInstance {
   const dataVersion = signal(0);
   const indexMap = computed(() => {
     dataVersion.get(); // track data changes
-    return buildIndexMap(data, sortState.get(), filterState.get());
+    return buildIndexMap(data, sortState.get(), filterState.get(), columns.get());
   });
 
   // Emit events when sort/filter state changes
