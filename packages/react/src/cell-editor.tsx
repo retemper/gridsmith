@@ -1,7 +1,9 @@
 import type { CellValue, EditingPluginApi, GridInstance, SelectOption } from '@gridsmith/core';
 import {
   type CSSProperties,
+  type CompositionEvent,
   type KeyboardEvent,
+  type MutableRefObject,
   type ReactNode,
   memo,
   useCallback,
@@ -25,26 +27,70 @@ const EDITOR_INPUT_STYLE: CSSProperties = {
   background: 'var(--gs-editor-bg, #fff)',
 };
 
+/**
+ * Detect whether a keydown event occurred mid-IME composition.
+ *
+ * CJK IMEs (Korean/Japanese/Chinese) fire synthetic Enter/keydown events to
+ * commit composition. Without this guard, the editor would prematurely commit
+ * the cell on the final composition keystroke, dropping the composed character
+ * or trailing half-composed text. Belt-and-suspenders: check the standard
+ * `isComposing` flag, the legacy `keyCode === 229` sentinel, AND a ref
+ * driven by `compositionstart`/`compositionend` events.
+ */
+function isComposingEvent(
+  e: KeyboardEvent<HTMLElement>,
+  composingRef: MutableRefObject<boolean>,
+): boolean {
+  return composingRef.current || e.nativeEvent.isComposing || e.keyCode === 229;
+}
+
+interface EditorKeyCallbacks {
+  onCancel: () => void;
+  onTab: (shift: boolean) => void;
+  onEnter: (shift: boolean) => void;
+}
+
 function useEditorKeyHandler(
-  onCommit: () => void,
-  onCancel: () => void,
-  onTab: (shift: boolean) => void,
+  callbacks: EditorKeyCallbacks,
+  composingRef: MutableRefObject<boolean>,
 ) {
+  const { onCancel, onTab, onEnter } = callbacks;
   return useCallback(
     (e: KeyboardEvent<HTMLElement>) => {
+      // Ignore Enter/Tab while an IME composition is in-flight; the IME owns
+      // those keys for confirming candidate text. Escape still works so users
+      // can bail out.
       if (e.key === 'Enter') {
+        if (isComposingEvent(e, composingRef)) return;
         e.preventDefault();
-        onCommit();
+        onEnter(e.shiftKey);
       } else if (e.key === 'Escape') {
         e.preventDefault();
         onCancel();
       } else if (e.key === 'Tab') {
+        if (isComposingEvent(e, composingRef)) return;
         e.preventDefault();
         onTab(e.shiftKey);
       }
     },
-    [onCommit, onCancel, onTab],
+    [onCancel, onTab, onEnter, composingRef],
   );
+}
+
+function useCompositionHandlers(composingRef: MutableRefObject<boolean>) {
+  const onCompositionStart = useCallback(
+    (_e: CompositionEvent<HTMLElement>) => {
+      composingRef.current = true;
+    },
+    [composingRef],
+  );
+  const onCompositionEnd = useCallback(
+    (_e: CompositionEvent<HTMLElement>) => {
+      composingRef.current = false;
+    },
+    [composingRef],
+  );
+  return { onCompositionStart, onCompositionEnd };
 }
 
 // ─── Built-in editor inputs ─────────────────────────────────
@@ -55,11 +101,14 @@ interface InputEditorProps {
   onCommit: () => void;
   onCancel: () => void;
   onTab: (shift: boolean) => void;
+  onEnter: (shift: boolean) => void;
 }
 
-function TextEditor({ value, onChange, onCommit, onCancel, onTab }: InputEditorProps) {
+function TextEditor({ value, onChange, onCommit, onCancel, onTab, onEnter }: InputEditorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const onKeyDown = useEditorKeyHandler(onCommit, onCancel, onTab);
+  const composingRef = useRef(false);
+  const onKeyDown = useEditorKeyHandler({ onCancel, onTab, onEnter }, composingRef);
+  const { onCompositionStart, onCompositionEnd } = useCompositionHandlers(composingRef);
 
   useEffect(() => {
     const el = inputRef.current;
@@ -76,15 +125,19 @@ function TextEditor({ value, onChange, onCommit, onCancel, onTab }: InputEditorP
       value={value}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
+      onCompositionStart={onCompositionStart}
+      onCompositionEnd={onCompositionEnd}
       onBlur={onCommit}
       style={EDITOR_INPUT_STYLE}
     />
   );
 }
 
-function NumberEditor({ value, onChange, onCommit, onCancel, onTab }: InputEditorProps) {
+function NumberEditor({ value, onChange, onCommit, onCancel, onTab, onEnter }: InputEditorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const onKeyDown = useEditorKeyHandler(onCommit, onCancel, onTab);
+  const composingRef = useRef(false);
+  const onKeyDown = useEditorKeyHandler({ onCancel, onTab, onEnter }, composingRef);
+  const { onCompositionStart, onCompositionEnd } = useCompositionHandlers(composingRef);
 
   useEffect(() => {
     const el = inputRef.current;
@@ -102,6 +155,8 @@ function NumberEditor({ value, onChange, onCommit, onCancel, onTab }: InputEdito
       value={value}
       onChange={(e) => onChange(e.target.value)}
       onKeyDown={onKeyDown}
+      onCompositionStart={onCompositionStart}
+      onCompositionEnd={onCompositionEnd}
       onBlur={onCommit}
       style={EDITOR_INPUT_STYLE}
     />
@@ -112,9 +167,19 @@ interface SelectEditorProps extends InputEditorProps {
   options: SelectOption[];
 }
 
-function SelectEditor({ value, options, onChange, onCommit, onCancel, onTab }: SelectEditorProps) {
+function SelectEditor({
+  value,
+  options,
+  onChange,
+  onCommit,
+  onCancel,
+  onTab,
+  onEnter,
+}: SelectEditorProps) {
   const selectRef = useRef<HTMLSelectElement>(null);
-  const onKeyDown = useEditorKeyHandler(onCommit, onCancel, onTab);
+  // <select> has no IME composition path, so we hard-code a non-composing ref.
+  const nonComposingRef = useRef(false);
+  const onKeyDown = useEditorKeyHandler({ onCancel, onTab, onEnter }, nonComposingRef);
 
   useEffect(() => {
     selectRef.current?.focus();
@@ -145,9 +210,11 @@ function SelectEditor({ value, options, onChange, onCommit, onCancel, onTab }: S
   );
 }
 
-function DateEditor({ value, onChange, onCommit, onCancel, onTab }: InputEditorProps) {
+function DateEditor({ value, onChange, onCommit, onCancel, onTab, onEnter }: InputEditorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const onKeyDown = useEditorKeyHandler(onCommit, onCancel, onTab);
+  // <input type="date"> is a native picker; no IME composition flows through it.
+  const nonComposingRef = useRef(false);
+  const onKeyDown = useEditorKeyHandler({ onCancel, onTab, onEnter }, nonComposingRef);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -178,6 +245,11 @@ interface CellEditorOverlayProps {
   editValue: CellValue;
   columnId: string;
   style: CSSProperties;
+  /**
+   * Called after Enter commits the edit. The grid moves the focused cell
+   * vertically (without opening a new editor) to mirror Excel's Enter/Shift+Enter.
+   */
+  onCommitAndMoveVertical: (shift: boolean) => void;
 }
 
 export const CellEditorOverlay = memo(function CellEditorOverlay({
@@ -189,6 +261,7 @@ export const CellEditorOverlay = memo(function CellEditorOverlay({
   editValue,
   columnId,
   style,
+  onCommitAndMoveVertical,
 }: CellEditorOverlayProps) {
   const col = columns[columnIndex];
   const editorType = col?.editor ?? col?.type ?? 'text';
@@ -221,6 +294,13 @@ export const CellEditorOverlay = memo(function CellEditorOverlay({
   const handleCancel = useCallback(() => {
     editingApi.cancelEdit();
   }, [editingApi]);
+
+  const handleEnter = useCallback(
+    (shift: boolean) => {
+      onCommitAndMoveVertical(shift);
+    },
+    [onCommitAndMoveVertical],
+  );
 
   const handleTab = useCallback(
     (shift: boolean) => {
@@ -303,6 +383,7 @@ export const CellEditorOverlay = memo(function CellEditorOverlay({
         onCommit={handleCommit}
         onCancel={handleCancel}
         onTab={handleTab}
+        onEnter={handleEnter}
       />
     );
   } else if (editorType === 'date') {
@@ -313,6 +394,7 @@ export const CellEditorOverlay = memo(function CellEditorOverlay({
         onCommit={handleCommit}
         onCancel={handleCancel}
         onTab={handleTab}
+        onEnter={handleEnter}
       />
     );
   } else if (editorType === 'number') {
@@ -323,6 +405,7 @@ export const CellEditorOverlay = memo(function CellEditorOverlay({
         onCommit={handleCommit}
         onCancel={handleCancel}
         onTab={handleTab}
+        onEnter={handleEnter}
       />
     );
   } else {
@@ -333,6 +416,7 @@ export const CellEditorOverlay = memo(function CellEditorOverlay({
         onCommit={handleCommit}
         onCancel={handleCancel}
         onTab={handleTab}
+        onEnter={handleEnter}
       />
     );
   }
