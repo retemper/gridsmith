@@ -59,6 +59,7 @@ jobs:
 
       - run: pnpm turbo build
       - run: pnpm turbo type-check
+      - run: pnpm lodestar
 
   test:
     needs: changed

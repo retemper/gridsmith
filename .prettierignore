@@ -5,3 +5,5 @@ pnpm-lock.yaml
 *.node
 *.wasm
 .turbo
+# Lodestar-managed files
+.lintstagedrc.json

@@ -30,7 +30,7 @@ MIT-licensed data grid with Excel-grade editing. No Pro tier, ever.
 
 ## Tech Stack
 
-pnpm + turborepo + changesets + tsup + vitest + playwright
+pnpm + turborepo + changesets + tsup + vitest + playwright + lodestar
 
 ## Package Structure
 
@@ -60,6 +60,8 @@ pnpm turbo test       # run tests
 pnpm turbo type-check # type check
 pnpm turbo lint       # lint
 pnpm format:check     # format check
+pnpm lodestar         # lodestar check (architecture + tool setup)
+pnpm lodestar:fix     # auto-fix managed config files
 pnpm playground:dev   # start playground
 ```
 
