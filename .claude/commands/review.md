@@ -40,7 +40,21 @@ Map to profiles:
 | `.changeset/*.md`                   | release |
 | `**/package.json` (version changes) | release |
 
-### 3. Profile-specific reviews
+### 3. Cross-validation: docs sync check
+
+When `packages/*/src/**` files are changed, check whether related docs need updating:
+
+1. Identify public API changes: new exports, changed function signatures, renamed types, removed APIs
+2. Search `apps/docs/**` for references to the changed APIs
+3. Flag if:
+   - A new public export has no corresponding docs page or mention
+   - A changed signature/behavior is documented with the old version
+   - A removed API is still referenced in docs
+   - Code examples in docs use outdated import paths or API calls
+
+This check runs automatically whenever the `code` profile is active. Report violations under a **Docs Sync** section before the summary table.
+
+### 4. Profile-specific reviews
 
 #### Profile: code
 
@@ -79,7 +93,7 @@ Map to profiles:
 - **Public API surface**: no accidental internal exports
 - **Migration path**: breaking changes have instructions
 
-### 4. Output format
+### 5. Output format
 
 Report only **violations** (skip passing items):
 
@@ -104,7 +118,7 @@ Report only **violations** (skip passing items):
 
 ````
 
-### 5. Summary table
+### 6. Summary table
 
 ```markdown
 | Profile | Critical | Warning | Suggestion |
