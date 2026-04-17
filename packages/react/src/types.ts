@@ -56,10 +56,19 @@ export interface GridProps {
   /** Controlled filter state */
   filterState?: FilterState;
 
+  /** Data-index rows pinned to the top */
+  pinnedTopRows?: number[];
+  /** Data-index rows pinned to the bottom */
+  pinnedBottomRows?: number[];
+
   /** Called when a cell value changes */
   onCellChange?: (change: CellChange) => void;
   /** Called when sort state changes */
   onSortChange?: (sort: SortState) => void;
   /** Called when filter state changes */
   onFilterChange?: (filter: FilterState) => void;
+  /** Called when a column is resized */
+  onColumnResize?: (columnId: string, width: number) => void;
+  /** Called when a column is reordered */
+  onColumnReorder?: (columnId: string, fromIndex: number, toIndex: number) => void;
 }

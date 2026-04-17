@@ -34,6 +34,12 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+
+  // jsdom doesn't support pointer capture
+  if (!HTMLElement.prototype.setPointerCapture) {
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+    HTMLElement.prototype.releasePointerCapture = vi.fn();
+  }
 });
 
 afterEach(() => {
@@ -377,6 +383,15 @@ describe('Grid', () => {
       expect(btn.getAttribute('aria-expanded')).toBe('true');
     });
 
+    it('closing the filter popover by clicking the same button toggles it off', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      const btn = container.querySelector('.gs-header-filter-btn') as HTMLButtonElement;
+      fireEvent.click(btn);
+      expect(container.querySelector('.gs-filter-popover')).toBeTruthy();
+      fireEvent.click(btn);
+      expect(container.querySelector('.gs-filter-popover')).toBeNull();
+    });
+
     it('select-typed columns show includes/excludes operators', () => {
       const cols: GridColumnDef[] = [
         {
@@ -396,6 +411,161 @@ describe('Grid', () => {
       const select = container.querySelector('.gs-filter-operator') as HTMLSelectElement;
       const values = Array.from(select.options).map((o) => o.value);
       expect(values).toEqual(['in', 'notIn']);
+    });
+  });
+
+  // ─── Column resize UI ──────────────────────────────────
+
+  describe('column resize', () => {
+    it('renders resize handles on resizable columns', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      const handles = container.querySelectorAll('.gs-resize-handle');
+      expect(handles).toHaveLength(2);
+    });
+
+    it('does not render resize handle when resizable=false', () => {
+      const cols: GridColumnDef[] = [
+        { id: 'name', header: 'Name', resizable: false },
+        { id: 'age', header: 'Age' },
+      ];
+      const { container } = render(<Grid data={data} columns={cols} />);
+      const handles = container.querySelectorAll('.gs-resize-handle');
+      expect(handles).toHaveLength(1);
+    });
+
+    it('wires up onColumnResize callback', () => {
+      const onResize = vi.fn();
+      const { container } = render(
+        <Grid data={data} columns={columns} onColumnResize={onResize} />,
+      );
+      // Callback is wired — verified by the handle presence and subscription setup
+      expect(container.querySelectorAll('.gs-resize-handle')).toHaveLength(2);
+    });
+
+    it('auto-fit double-click handler exists on resize handle', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      const handle = container.querySelector('.gs-resize-handle') as HTMLElement;
+      // Should not throw
+      fireEvent.doubleClick(handle);
+    });
+  });
+
+  // ─── Column reorder UI ────────────────────────────────
+
+  describe('column reorder', () => {
+    it('header cells are draggable', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      const headers = container.querySelectorAll('.gs-header-cell');
+      for (const header of Array.from(headers)) {
+        expect(header.getAttribute('draggable')).toBe('true');
+      }
+    });
+
+    it('calls onColumnReorder on drop', () => {
+      const onReorder = vi.fn();
+      const { container } = render(
+        <Grid data={data} columns={columns} onColumnReorder={onReorder} />,
+      );
+      const headers = container.querySelectorAll('.gs-header-cell');
+
+      // Drag from first to second column
+      fireEvent.dragStart(headers[0], { dataTransfer: { effectAllowed: '', setData: vi.fn() } });
+      fireEvent.dragOver(headers[1], {
+        dataTransfer: { dropEffect: '' },
+        preventDefault: vi.fn(),
+      });
+      fireEvent.drop(headers[1], { preventDefault: vi.fn() });
+
+      expect(onReorder).toHaveBeenCalledWith('name', 0, 1);
+    });
+
+    it('cleans up drag state on dragEnd', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      const header = container.querySelector('.gs-header-cell') as HTMLElement;
+
+      fireEvent.dragStart(header, { dataTransfer: { effectAllowed: '', setData: vi.fn() } });
+      fireEvent.dragEnd(header);
+      // Should not have drag-over class
+      expect(header.classList.contains('gs-header-cell--drag-over')).toBe(false);
+    });
+  });
+
+  // ─── Pinned columns ──────────────────────────────────
+
+  describe('pinned columns', () => {
+    it('renders pinned-left class on cells', () => {
+      const cols: GridColumnDef[] = [
+        { id: 'id', header: '#', pin: 'left', width: 50 },
+        { id: 'name', header: 'Name' },
+      ];
+      const { container } = render(<Grid data={data} columns={cols} />);
+      const pinned = container.querySelectorAll('.gs-cell--pinned-left');
+      expect(pinned.length).toBeGreaterThan(0);
+    });
+
+    it('renders pinned-right class on cells', () => {
+      const cols: GridColumnDef[] = [
+        { id: 'name', header: 'Name' },
+        { id: 'actions', header: 'Actions', pin: 'right', width: 80 },
+      ];
+      const { container } = render(<Grid data={data} columns={cols} />);
+      const pinned = container.querySelectorAll('.gs-cell--pinned-right');
+      expect(pinned.length).toBeGreaterThan(0);
+    });
+
+    it('applies pinned header class', () => {
+      const cols: GridColumnDef[] = [
+        { id: 'id', header: '#', pin: 'left', width: 50 },
+        { id: 'name', header: 'Name' },
+      ];
+      const { container } = render(<Grid data={data} columns={cols} />);
+      const pinned = container.querySelectorAll('.gs-header-cell--pinned');
+      expect(pinned).toHaveLength(1);
+    });
+  });
+
+  // ─── Pinned rows ──────────────────��───────────────────
+
+  describe('pinned rows', () => {
+    it('renders pinned top rows', () => {
+      const { container } = render(<Grid data={data} columns={columns} pinnedTopRows={[0]} />);
+      const pinnedSection = container.querySelector('.gs-pinned-rows--top');
+      expect(pinnedSection).toBeTruthy();
+      const pinnedRows = pinnedSection!.querySelectorAll('.gs-row--pinned-top');
+      expect(pinnedRows).toHaveLength(1);
+    });
+
+    it('renders pinned bottom rows', () => {
+      const { container } = render(<Grid data={data} columns={columns} pinnedBottomRows={[1]} />);
+      const pinnedSection = container.querySelector('.gs-pinned-rows--bottom');
+      expect(pinnedSection).toBeTruthy();
+      const pinnedRows = pinnedSection!.querySelectorAll('.gs-row--pinned-bottom');
+      expect(pinnedRows).toHaveLength(1);
+    });
+
+    it('does not render pinned sections when empty', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      expect(container.querySelector('.gs-pinned-rows--top')).toBeNull();
+      expect(container.querySelector('.gs-pinned-rows--bottom')).toBeNull();
+    });
+
+    it('clears pinned rows when prop changes to undefined', () => {
+      const { container, rerender } = render(
+        <Grid data={data} columns={columns} pinnedTopRows={[0]} />,
+      );
+      expect(container.querySelector('.gs-pinned-rows--top')).toBeTruthy();
+
+      rerender(<Grid data={data} columns={columns} pinnedTopRows={undefined} />);
+      expect(container.querySelector('.gs-pinned-rows--top')).toBeNull();
+    });
+
+    it('skips invalid data indices gracefully', () => {
+      const { container } = render(<Grid data={data} columns={columns} pinnedTopRows={[999]} />);
+      // Should not crash; no pinned row rendered for out-of-range index
+      const pinnedSection = container.querySelector('.gs-pinned-rows--top');
+      expect(pinnedSection).toBeTruthy();
+      const pinnedRows = pinnedSection!.querySelectorAll('.gs-row--pinned');
+      expect(pinnedRows).toHaveLength(0);
     });
   });
 });

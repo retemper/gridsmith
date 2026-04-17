@@ -20,27 +20,57 @@ export const DEFAULT_CONFIG: VirtualizationConfig = {
 // ─── Column Layout ────────────────────────────────────────
 
 export interface ColumnLayout {
-  /** Left offset of each column in pixels */
+  /** Left offset of each column in pixels (within its own zone) */
   offsets: number[];
   /** Resolved width of each column in pixels */
   widths: number[];
   /** Total width of all columns */
   totalWidth: number;
+  /** Indices of columns pinned to the left */
+  pinnedLeftIndices: number[];
+  /** Indices of columns pinned to the right */
+  pinnedRightIndices: number[];
+  /** Total width of left-pinned columns */
+  pinnedLeftWidth: number;
+  /** Total width of right-pinned columns */
+  pinnedRightWidth: number;
 }
 
 export function computeColumnLayout(columns: ColumnDef[], defaultWidth: number): ColumnLayout {
-  const widths: number[] = [];
-  const offsets: number[] = [];
-  let offset = 0;
+  const widths: number[] = new Array(columns.length);
+  const offsets: number[] = new Array(columns.length);
+  const pinnedLeftIndices: number[] = [];
+  const pinnedRightIndices: number[] = [];
 
-  for (const col of columns) {
-    const w = col.visible === false ? 0 : (col.width ?? defaultWidth);
-    offsets.push(offset);
-    widths.push(w);
-    offset += w;
+  // First pass: compute widths and categorize
+  for (let i = 0; i < columns.length; i++) {
+    const col = columns[i];
+    widths[i] = col.visible === false ? 0 : (col.width ?? defaultWidth);
+    if (col.pin === 'left') pinnedLeftIndices.push(i);
+    else if (col.pin === 'right') pinnedRightIndices.push(i);
   }
 
-  return { offsets, widths, totalWidth: offset };
+  // Second pass: compute offsets (linear left-to-right for all columns)
+  let offset = 0;
+  for (let i = 0; i < columns.length; i++) {
+    offsets[i] = offset;
+    offset += widths[i];
+  }
+
+  let pinnedLeftWidth = 0;
+  for (const i of pinnedLeftIndices) pinnedLeftWidth += widths[i];
+  let pinnedRightWidth = 0;
+  for (const i of pinnedRightIndices) pinnedRightWidth += widths[i];
+
+  return {
+    offsets,
+    widths,
+    totalWidth: offset,
+    pinnedLeftIndices,
+    pinnedRightIndices,
+    pinnedLeftWidth,
+    pinnedRightWidth,
+  };
 }
 
 // ─── Visible Range Calculation ────────────────────────────

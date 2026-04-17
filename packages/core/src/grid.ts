@@ -16,7 +16,12 @@ import type {
 } from './types';
 
 export function createGrid(options: GridOptions): GridInstance {
-  const { columns: initialColumns, plugins: initialPlugins = [] } = options;
+  const {
+    columns: initialColumns,
+    plugins: initialPlugins = [],
+    pinnedTopRows: initialPinnedTop = [],
+    pinnedBottomRows: initialPinnedBottom = [],
+  } = options;
 
   // Copy-on-init per RFC-001: shallow copy each row to avoid mutating caller's objects
   let data: Row[] = options.data.map((row) => ({ ...row }));
@@ -25,6 +30,8 @@ export function createGrid(options: GridOptions): GridInstance {
   const columns = signal<ColumnDef[]>([...initialColumns]);
   const sortState = signal<SortState>([]);
   const filterState = signal<FilterState>([]);
+  const pinnedTopRows = signal<number[]>([...initialPinnedTop]);
+  const pinnedBottomRows = signal<number[]>([...initialPinnedBottom]);
 
   // Event bus
   const events = createEventBus<GridEvents>();
@@ -62,6 +69,18 @@ export function createGrid(options: GridOptions): GridInstance {
     sortState,
     filterState,
     indexMap,
+    pinnedTopRows,
+    pinnedBottomRows,
+
+    setPinnedTopRows(indices: number[]): void {
+      assertAlive();
+      pinnedTopRows.set([...indices]);
+    },
+
+    setPinnedBottomRows(indices: number[]): void {
+      assertAlive();
+      pinnedBottomRows.set([...indices]);
+    },
 
     get rowCount() {
       return indexMap.get().length;
@@ -103,6 +122,46 @@ export function createGrid(options: GridOptions): GridInstance {
       assertAlive();
       columns.set([...newColumns]);
       events.emit('columns:update', { columns: columns.get() });
+    },
+
+    resizeColumn(columnId: string, width: number): void {
+      assertAlive();
+      const cols = columns.get();
+      const idx = cols.findIndex((c) => c.id === columnId);
+      if (idx === -1) return;
+      const col = cols[idx];
+      const min = col.minWidth ?? 30;
+      const max = col.maxWidth ?? Infinity;
+      const clamped = Math.max(min, Math.min(max, width));
+      if (col.width === clamped) return;
+      const next = cols.map((c, i) => (i === idx ? { ...c, width: clamped } : c));
+      columns.set(next);
+      events.emit('column:resize', { columnId, width: clamped });
+      events.emit('columns:update', { columns: next });
+    },
+
+    reorderColumn(fromIndex: number, toIndex: number): void {
+      assertAlive();
+      const cols = columns.get();
+      if (
+        fromIndex === toIndex ||
+        fromIndex < 0 ||
+        fromIndex >= cols.length ||
+        toIndex < 0 ||
+        toIndex >= cols.length
+      )
+        return;
+      const col = cols[fromIndex];
+      const next = [...cols];
+      next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, col);
+      columns.set(next);
+      events.emit('column:reorder', {
+        columnId: col.id,
+        fromIndex,
+        toIndex,
+      });
+      events.emit('columns:update', { columns: next });
     },
 
     batchUpdate(fn: () => void): void {

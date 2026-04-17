@@ -279,6 +279,138 @@ describe('destroy', () => {
   });
 });
 
+describe('resizeColumn', () => {
+  it('updates the column width', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.resizeColumn('name', 200);
+
+    const cols = grid.columns.get();
+    expect(cols.find((c) => c.id === 'name')!.width).toBe(200);
+  });
+
+  it('emits column:resize and columns:update events', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const resizeFn = vi.fn();
+    const updateFn = vi.fn();
+    grid.events.on('column:resize', resizeFn);
+    grid.events.on('columns:update', updateFn);
+
+    grid.resizeColumn('age', 150);
+    expect(resizeFn).toHaveBeenCalledWith({ columnId: 'age', width: 150 });
+    expect(updateFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('clamps to minWidth and maxWidth', () => {
+    const cols: ColumnDef[] = [{ id: 'a', header: 'A', minWidth: 50, maxWidth: 300, width: 100 }];
+    const grid = createGrid({ data: [], columns: cols });
+
+    grid.resizeColumn('a', 10);
+    expect(grid.columns.get()[0]!.width).toBe(50);
+
+    grid.resizeColumn('a', 500);
+    expect(grid.columns.get()[0]!.width).toBe(300);
+  });
+
+  it('uses default minWidth of 30 when not specified', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.resizeColumn('name', 5);
+    expect(grid.columns.get().find((c) => c.id === 'name')!.width).toBe(30);
+  });
+
+  it('does not emit when width unchanged', () => {
+    const cols: ColumnDef[] = [{ id: 'a', header: 'A', width: 100 }];
+    const grid = createGrid({ data: [], columns: cols });
+    const fn = vi.fn();
+    grid.events.on('column:resize', fn);
+
+    grid.resizeColumn('a', 100);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('ignores unknown column IDs', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.events.on('column:resize', fn);
+
+    grid.resizeColumn('unknown', 200);
+    expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe('reorderColumn', () => {
+  it('moves a column from one index to another', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    grid.reorderColumn(0, 2);
+
+    const cols = grid.columns.get();
+    expect(cols.map((c) => c.id)).toEqual(['age', 'city', 'name']);
+  });
+
+  it('emits column:reorder and columns:update events', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const reorderFn = vi.fn();
+    const updateFn = vi.fn();
+    grid.events.on('column:reorder', reorderFn);
+    grid.events.on('columns:update', updateFn);
+
+    grid.reorderColumn(2, 0);
+    expect(reorderFn).toHaveBeenCalledWith({
+      columnId: 'city',
+      fromIndex: 2,
+      toIndex: 0,
+    });
+    expect(updateFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('no-ops when from === to', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.events.on('column:reorder', fn);
+
+    grid.reorderColumn(1, 1);
+    expect(fn).not.toHaveBeenCalled();
+  });
+
+  it('no-ops for out-of-range indices', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    const fn = vi.fn();
+    grid.events.on('column:reorder', fn);
+
+    grid.reorderColumn(-1, 0);
+    grid.reorderColumn(0, 99);
+    expect(fn).not.toHaveBeenCalled();
+  });
+});
+
+describe('pinned rows', () => {
+  it('initializes with pinnedTopRows and pinnedBottomRows', () => {
+    const grid = createGrid({
+      data: sampleData,
+      columns: sampleColumns,
+      pinnedTopRows: [0],
+      pinnedBottomRows: [2],
+    });
+    expect(grid.pinnedTopRows.get()).toEqual([0]);
+    expect(grid.pinnedBottomRows.get()).toEqual([2]);
+  });
+
+  it('defaults to empty arrays', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+    expect(grid.pinnedTopRows.get()).toEqual([]);
+    expect(grid.pinnedBottomRows.get()).toEqual([]);
+  });
+
+  it('updates pinned rows via setters', () => {
+    const grid = createGrid({ data: sampleData, columns: sampleColumns });
+
+    grid.setPinnedTopRows([0, 1]);
+    expect(grid.pinnedTopRows.get()).toEqual([0, 1]);
+
+    grid.setPinnedBottomRows([2]);
+    expect(grid.pinnedBottomRows.get()).toEqual([2]);
+  });
+});
+
 describe('reactive state', () => {
   it('indexMap recomputes on sort change', () => {
     const grid = createGrid({ data: sampleData, columns: sampleColumns });

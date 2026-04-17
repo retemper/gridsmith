@@ -134,6 +134,8 @@ export interface GridEvents {
   'sort:change': { sort: SortState };
   'filter:change': { filter: FilterState };
   'viewport:change': { viewport: ViewportState };
+  'column:resize': { columnId: string; width: number };
+  'column:reorder': { columnId: string; fromIndex: number; toIndex: number };
   'edit:begin': EditState;
   'edit:commit': {
     rowIndex: number;
@@ -208,6 +210,10 @@ export interface GridOptions {
   data: Row[];
   columns: ColumnDef[];
   plugins?: GridPlugin[];
+  /** Indices (into `data`) of rows pinned to the top. */
+  pinnedTopRows?: number[];
+  /** Indices (into `data`) of rows pinned to the bottom. */
+  pinnedBottomRows?: number[];
 }
 
 // ─── Grid Instance ─────────────────────────────────────────
@@ -228,6 +234,10 @@ export interface GridInstance {
   setData(data: Row[]): void;
   setColumns(columns: ColumnDef[]): void;
 
+  // Column operations
+  resizeColumn(columnId: string, width: number): void;
+  reorderColumn(fromIndex: number, toIndex: number): void;
+
   // Batch updates
   batchUpdate(fn: () => void): void;
 
@@ -239,6 +249,12 @@ export interface GridInstance {
 
   // Cell decorators
   getCellDecorations(row: number, col: string): CellDecoration[];
+
+  // Pinned rows
+  readonly pinnedTopRows: ReadonlySignal<number[]>;
+  readonly pinnedBottomRows: ReadonlySignal<number[]>;
+  setPinnedTopRows(indices: number[]): void;
+  setPinnedBottomRows(indices: number[]): void;
 
   // Row count (view)
   readonly rowCount: number;
