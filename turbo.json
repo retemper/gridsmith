@@ -16,6 +16,10 @@
     "lint": {
       "dependsOn": []
     },
+    "lodestar": {
+      "dependsOn": [],
+      "cache": false
+    },
     "e2e": {
       "dependsOn": ["build"],
       "outputs": ["playwright-report/**"],
