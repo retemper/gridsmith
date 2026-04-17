@@ -175,6 +175,60 @@ describe('calculateVisibleRange', () => {
   });
 });
 
+// ─── computeColumnLayout with pinning ────────────────────
+
+describe('computeColumnLayout pinning', () => {
+  it('identifies pinned left columns', () => {
+    const cols: ColumnDef[] = [
+      { id: 'a', header: 'A', width: 80, pin: 'left' },
+      { id: 'b', header: 'B', width: 100 },
+      { id: 'c', header: 'C', width: 120 },
+    ];
+    const layout = computeColumnLayout(cols, 100);
+
+    expect(layout.pinnedLeftIndices).toEqual([0]);
+    expect(layout.pinnedLeftWidth).toBe(80);
+    expect(layout.pinnedRightIndices).toEqual([]);
+    expect(layout.pinnedRightWidth).toBe(0);
+  });
+
+  it('identifies pinned right columns', () => {
+    const cols: ColumnDef[] = [
+      { id: 'a', header: 'A', width: 100 },
+      { id: 'b', header: 'B', width: 80, pin: 'right' },
+    ];
+    const layout = computeColumnLayout(cols, 100);
+
+    expect(layout.pinnedRightIndices).toEqual([1]);
+    expect(layout.pinnedRightWidth).toBe(80);
+  });
+
+  it('handles both left and right pinned columns', () => {
+    const cols: ColumnDef[] = [
+      { id: 'a', header: 'A', width: 60, pin: 'left' },
+      { id: 'b', header: 'B', width: 100 },
+      { id: 'c', header: 'C', width: 70, pin: 'right' },
+    ];
+    const layout = computeColumnLayout(cols, 100);
+
+    expect(layout.pinnedLeftIndices).toEqual([0]);
+    expect(layout.pinnedLeftWidth).toBe(60);
+    expect(layout.pinnedRightIndices).toEqual([2]);
+    expect(layout.pinnedRightWidth).toBe(70);
+    expect(layout.totalWidth).toBe(230);
+  });
+
+  it('returns empty pinning info when no columns are pinned', () => {
+    const cols: ColumnDef[] = [{ id: 'a', header: 'A', width: 100 }];
+    const layout = computeColumnLayout(cols, 100);
+
+    expect(layout.pinnedLeftIndices).toEqual([]);
+    expect(layout.pinnedRightIndices).toEqual([]);
+    expect(layout.pinnedLeftWidth).toBe(0);
+    expect(layout.pinnedRightWidth).toBe(0);
+  });
+});
+
 // ─── getTotalHeight ───────────────────────────────────────
 
 describe('getTotalHeight', () => {

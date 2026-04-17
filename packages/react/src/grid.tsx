@@ -92,9 +92,13 @@ export const Grid = memo(function Grid({
   className,
   sortState: controlledSort,
   filterState: controlledFilter,
+  pinnedTopRows: pinnedTopRowsProp,
+  pinnedBottomRows: pinnedBottomRowsProp,
   onCellChange,
   onSortChange,
   onFilterChange,
+  onColumnResize,
+  onColumnReorder,
 }: GridProps) {
   const headerHeight = headerHeightProp ?? rowHeight;
 
@@ -143,6 +147,29 @@ export const Grid = memo(function Grid({
     if (!onFilterChange) return;
     return grid.subscribe('filter:change', ({ filter }) => onFilterChange(filter));
   }, [grid, onFilterChange]);
+
+  useEffect(() => {
+    if (!onColumnResize) return;
+    return grid.subscribe('column:resize', ({ columnId, width }) =>
+      onColumnResize(columnId, width),
+    );
+  }, [grid, onColumnResize]);
+
+  useEffect(() => {
+    if (!onColumnReorder) return;
+    return grid.subscribe('column:reorder', ({ columnId, fromIndex, toIndex }) =>
+      onColumnReorder(columnId, fromIndex, toIndex),
+    );
+  }, [grid, onColumnReorder]);
+
+  // Sync pinned rows
+  useEffect(() => {
+    grid.setPinnedTopRows(pinnedTopRowsProp ?? []);
+  }, [pinnedTopRowsProp, grid]);
+
+  useEffect(() => {
+    grid.setPinnedBottomRows(pinnedBottomRowsProp ?? []);
+  }, [pinnedBottomRowsProp, grid]);
 
   // ─── Editing state ─────────────────────────────────────
 
@@ -262,6 +289,8 @@ export const Grid = memo(function Grid({
     if (headerInnerRef.current) {
       headerInnerRef.current.style.transform = `translateX(-${el.scrollLeft}px)`;
     }
+    // Expose scrollLeft as CSS custom property for pinned column transforms
+    el.style.setProperty('--gs-scroll-left', `${el.scrollLeft}px`);
     setVisibleRange((prev) => (rangeEqual(prev, range) ? prev : range));
   }, []);
 
@@ -327,95 +356,230 @@ export const Grid = memo(function Grid({
     return m;
   }, [currentFilter]);
 
+  // ─── Column resize ─────────────────────────────────────
+
+  const resizeRef = useRef<{
+    columnId: string;
+    startX: number;
+    startWidth: number;
+  } | null>(null);
+
+  const handleResizePointerDown = useCallback(
+    (e: React.PointerEvent, colId: string, colIndex: number) => {
+      e.preventDefault();
+      e.stopPropagation();
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      resizeRef.current = {
+        columnId: colId,
+        startX: e.clientX,
+        startWidth: columnLayout.widths[colIndex],
+      };
+    },
+    [columnLayout],
+  );
+
+  const resizeRafRef = useRef<number | null>(null);
+
+  const handleResizePointerMove = useCallback(
+    (e: React.PointerEvent) => {
+      if (!resizeRef.current) return;
+      const delta = e.clientX - resizeRef.current.startX;
+      const newWidth = resizeRef.current.startWidth + delta;
+      const colId = resizeRef.current.columnId;
+      if (resizeRafRef.current !== null) cancelAnimationFrame(resizeRafRef.current);
+      resizeRafRef.current = requestAnimationFrame(() => {
+        resizeRafRef.current = null;
+        grid.resizeColumn(colId, newWidth);
+      });
+    },
+    [grid],
+  );
+
+  const handleResizePointerUp = useCallback(() => {
+    resizeRef.current = null;
+  }, []);
+
+  const handleResizeDoubleClick = useCallback(
+    (e: React.MouseEvent, colId: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Auto-fit: measure content width by scanning visible rows
+      const vp = viewportRef.current;
+      if (!vp) return;
+      const cells = vp.querySelectorAll(`[data-col="${colId}"]`);
+      let maxWidth = 60; // minimum auto-fit width
+      cells.forEach((cell) => {
+        maxWidth = Math.max(maxWidth, (cell as HTMLElement).scrollWidth + 16);
+      });
+      grid.resizeColumn(colId, maxWidth);
+    },
+    [grid],
+  );
+
+  // ─── Column reorder (drag & drop) ─────────────────────
+
+  const dragRef = useRef<{
+    columnId: string;
+    fromIndex: number;
+  } | null>(null);
+
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  const handleDragStart = useCallback((e: React.DragEvent, colId: string, colIndex: number) => {
+    dragRef.current = { columnId: colId, fromIndex: colIndex };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', colId);
+  }, []);
+
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const headerCell = (e.target as HTMLElement).closest('.gs-header-cell') as HTMLElement | null;
+      if (!headerCell) return;
+      const colId = headerCell.dataset.col;
+      if (!colId) return;
+      const idx = currentColumns.findIndex((c) => c.id === colId);
+      if (idx !== -1) setDragOverIndex(idx);
+    },
+    [currentColumns],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      if (!dragRef.current || dragOverIndex === null) return;
+      grid.reorderColumn(dragRef.current.fromIndex, dragOverIndex);
+      dragRef.current = null;
+      setDragOverIndex(null);
+    },
+    [grid, dragOverIndex],
+  );
+
+  const handleDragEnd = useCallback(() => {
+    dragRef.current = null;
+    setDragOverIndex(null);
+  }, []);
+
+  // ─── Pinned rows ──────────────────────────────────────
+
+  const currentPinnedTop = useSignalValue(grid.pinnedTopRows);
+  const currentPinnedBottom = useSignalValue(grid.pinnedBottomRows);
+
   // ─── Render header ─────────────────────────────────────
 
-  const headerCells = useMemo(
-    () =>
-      currentColumns.map((col, i) => {
-        if (col.visible === false) return null;
-        const sortInfo = sortIndexByCol.get(col.id);
-        const hasFilter = filterByCol.has(col.id);
-        const sortable = col.sortable !== false;
-        const filterable = col.filterable !== false;
-        const isMulti = currentSort.length > 1;
+  const renderHeaderCell = useCallback(
+    (col: (typeof currentColumns)[number], i: number) => {
+      if (col.visible === false) return null;
+      const sortInfo = sortIndexByCol.get(col.id);
+      const hasFilter = filterByCol.has(col.id);
+      const sortable = col.sortable !== false;
+      const filterable = col.filterable !== false;
+      const isMulti = currentSort.length > 1;
+      const resizable = col.resizable !== false;
+      const isPinned = col.pin === 'left' || col.pin === 'right';
+      const isDragOver = dragOverIndex === i;
 
-        return (
-          <div
-            key={col.id}
-            className={`gs-header-cell${sortable ? ' gs-header-cell--sortable' : ''}`}
-            role="columnheader"
-            aria-sort={
-              sortInfo ? (sortInfo.direction === 'asc' ? 'ascending' : 'descending') : 'none'
-            }
-            data-col={col.id}
+      return (
+        <div
+          key={col.id}
+          className={`gs-header-cell${sortable ? ' gs-header-cell--sortable' : ''}${isPinned ? ' gs-header-cell--pinned' : ''}${isDragOver ? ' gs-header-cell--drag-over' : ''}`}
+          role="columnheader"
+          aria-sort={
+            sortInfo ? (sortInfo.direction === 'asc' ? 'ascending' : 'descending') : 'none'
+          }
+          data-col={col.id}
+          draggable
+          onDragStart={(e) => handleDragStart(e, col.id, i)}
+          onDragOver={handleDragOver}
+          onDrop={handleDrop}
+          onDragEnd={handleDragEnd}
+          style={{
+            position: 'absolute',
+            left: columnLayout.offsets[i],
+            width: columnLayout.widths[i],
+            height: headerHeight,
+            boxSizing: 'border-box',
+            overflow: 'hidden',
+            display: 'flex',
+            alignItems: 'center',
+            userSelect: 'none',
+          }}
+        >
+          <button
+            type="button"
+            className="gs-header-label"
+            disabled={!sortable}
+            onClick={(e) => {
+              if (!sortable) return;
+              handleHeaderSortClick(col.id, e.shiftKey);
+            }}
             style={{
-              position: 'absolute',
-              left: columnLayout.offsets[i],
-              width: columnLayout.widths[i],
-              height: headerHeight,
-              boxSizing: 'border-box',
-              overflow: 'hidden',
-              display: 'flex',
-              alignItems: 'center',
-              userSelect: 'none',
+              flex: 1,
+              textAlign: 'left',
+              background: 'transparent',
+              border: 'none',
+              padding: '0 6px',
+              height: '100%',
+              cursor: sortable ? 'pointer' : 'default',
+              font: 'inherit',
+              color: 'inherit',
             }}
           >
+            {col.header}
+            {sortInfo ? (
+              <span className="gs-header-sort-indicator" aria-hidden="true">
+                {' '}
+                {sortInfo.direction === 'asc' ? '▲' : '▼'}
+                {isMulti ? <sub>{sortInfo.index + 1}</sub> : null}
+              </span>
+            ) : null}
+          </button>
+          {filterable ? (
             <button
               type="button"
-              className="gs-header-label"
-              disabled={!sortable}
+              className={`gs-header-filter-btn${hasFilter ? ' gs-header-filter-btn--active' : ''}`}
+              aria-label={`Filter ${col.header}`}
+              aria-haspopup="dialog"
+              aria-expanded={openFilterCol === col.id}
               onClick={(e) => {
-                if (!sortable) return;
-                handleHeaderSortClick(col.id, e.shiftKey);
+                e.stopPropagation();
+                setOpenFilterCol((cur) => (cur === col.id ? null : col.id));
               }}
               style={{
-                flex: 1,
-                textAlign: 'left',
-                background: 'transparent',
                 border: 'none',
+                background: 'transparent',
+                cursor: 'pointer',
                 padding: '0 6px',
                 height: '100%',
-                cursor: sortable ? 'pointer' : 'default',
+                color: hasFilter ? '#1a66ff' : 'inherit',
                 font: 'inherit',
-                color: 'inherit',
               }}
             >
-              {col.header}
-              {sortInfo ? (
-                <span className="gs-header-sort-indicator" aria-hidden="true">
-                  {' '}
-                  {sortInfo.direction === 'asc' ? '▲' : '▼'}
-                  {isMulti ? <sub>{sortInfo.index + 1}</sub> : null}
-                </span>
-              ) : null}
+              ⚲
             </button>
-            {filterable ? (
-              <button
-                type="button"
-                className={`gs-header-filter-btn${hasFilter ? ' gs-header-filter-btn--active' : ''}`}
-                aria-label={`Filter ${col.header}`}
-                aria-haspopup="dialog"
-                aria-expanded={openFilterCol === col.id}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenFilterCol((cur) => (cur === col.id ? null : col.id));
-                }}
-                style={{
-                  border: 'none',
-                  background: 'transparent',
-                  cursor: 'pointer',
-                  padding: '0 6px',
-                  height: '100%',
-                  color: hasFilter ? '#1a66ff' : 'inherit',
-                  font: 'inherit',
-                }}
-              >
-                ⚲
-              </button>
-            ) : null}
-          </div>
-        );
-      }),
+          ) : null}
+          {resizable ? (
+            <div
+              className="gs-resize-handle"
+              onPointerDown={(e) => handleResizePointerDown(e, col.id, i)}
+              onPointerMove={handleResizePointerMove}
+              onPointerUp={handleResizePointerUp}
+              onDoubleClick={(e) => handleResizeDoubleClick(e, col.id)}
+              style={{
+                position: 'absolute',
+                right: 0,
+                top: 0,
+                width: 6,
+                height: '100%',
+                cursor: 'col-resize',
+                zIndex: 1,
+              }}
+            />
+          ) : null}
+        </div>
+      );
+    },
     [
       currentColumns,
       columnLayout,
@@ -425,7 +589,21 @@ export const Grid = memo(function Grid({
       currentSort.length,
       handleHeaderSortClick,
       openFilterCol,
+      dragOverIndex,
+      handleDragStart,
+      handleDragOver,
+      handleDrop,
+      handleDragEnd,
+      handleResizePointerDown,
+      handleResizePointerMove,
+      handleResizePointerUp,
+      handleResizeDoubleClick,
     ],
+  );
+
+  const headerCells = useMemo(
+    () => currentColumns.map((col, i) => renderHeaderCell(col, i)),
+    [currentColumns, renderHeaderCell],
   );
 
   // ─── Filter popover ────────────────────────────────────
@@ -484,7 +662,10 @@ export const Grid = memo(function Grid({
         }
 
         const decorations = grid.getCellDecorations(r, col.id);
+        const isPinned = col.pin === 'left' || col.pin === 'right';
         let cellClassName = 'gs-cell';
+        if (col.pin === 'left') cellClassName += ' gs-cell--pinned-left';
+        if (col.pin === 'right') cellClassName += ' gs-cell--pinned-right';
         const cellStyle: CSSProperties = {
           position: 'absolute',
           left: columnLayout.offsets[c],
@@ -492,6 +673,14 @@ export const Grid = memo(function Grid({
           height: rowHeight,
           boxSizing: 'border-box',
           overflow: 'hidden',
+          // Pinned columns: translate by scrollLeft so they stay fixed in
+          // the viewport. The CSS custom property is set on every scroll
+          // event via direct DOM mutation, avoiding React re-renders.
+          ...(isPinned && {
+            zIndex: 2,
+            background: 'inherit',
+            transform: 'translateX(var(--gs-scroll-left, 0px))',
+          }),
         };
         const attrs: Record<string, string> = {};
 
@@ -891,6 +1080,99 @@ export const Grid = memo(function Grid({
     handleCommitAndMoveVertical,
   ]);
 
+  // ─── Pinned rows rendering ─────────────────────────────
+
+  const renderPinnedRows = useCallback(
+    (dataIndices: number[], position: 'top' | 'bottom') => {
+      if (dataIndices.length === 0) return null;
+
+      // read dataVersion so pinned rows re-render on data changes
+      void dataVersion;
+
+      const rows: ReactNode[] = [];
+      for (let i = 0; i < dataIndices.length; i++) {
+        const dataIdx = dataIndices[i];
+        // We need to find the viewIndex that maps to this data index,
+        // or render directly from data if the row is filtered out.
+        const cells: ReactNode[] = [];
+        const dataSnapshot = grid.data;
+        const row = dataSnapshot[dataIdx];
+        if (!row) continue;
+        for (let c = 0; c < currentColumns.length; c++) {
+          const col = currentColumns[c];
+          if (col.visible === false) continue;
+          const value = row[col.id];
+          const isPinned = col.pin === 'left' || col.pin === 'right';
+          let cellClassName = 'gs-cell gs-cell--pinned-row';
+          if (col.pin === 'left') cellClassName += ' gs-cell--pinned-left';
+          if (col.pin === 'right') cellClassName += ' gs-cell--pinned-right';
+
+          cells.push(
+            <div
+              key={col.id}
+              className={cellClassName}
+              style={{
+                position: 'absolute',
+                left: columnLayout.offsets[c],
+                width: columnLayout.widths[c],
+                height: rowHeight,
+                boxSizing: 'border-box',
+                overflow: 'hidden',
+                background: 'inherit',
+                ...(isPinned && { zIndex: 2 }),
+              }}
+            >
+              {formatCellValue(value)}
+            </div>,
+          );
+        }
+
+        rows.push(
+          <div
+            key={dataIdx}
+            className={`gs-row gs-row--pinned gs-row--pinned-${position}`}
+            data-pinned={position}
+            data-data-index={dataIdx}
+            style={{
+              position: 'relative',
+              width: columnLayout.totalWidth,
+              height: rowHeight,
+            }}
+          >
+            {cells}
+          </div>,
+        );
+      }
+
+      return (
+        <div
+          className={`gs-pinned-rows gs-pinned-rows--${position}`}
+          style={{
+            position: 'relative',
+            flexShrink: 0,
+            overflow: 'hidden',
+            zIndex: 3,
+            borderBottom: position === 'top' ? '2px solid #e2e8f0' : undefined,
+            borderTop: position === 'bottom' ? '2px solid #e2e8f0' : undefined,
+          }}
+        >
+          {rows}
+        </div>
+      );
+    },
+    [currentColumns, columnLayout, rowHeight, grid, dataVersion],
+  );
+
+  const pinnedTopRowsEl = useMemo(
+    () => renderPinnedRows(currentPinnedTop, 'top'),
+    [renderPinnedRows, currentPinnedTop],
+  );
+
+  const pinnedBottomRowsEl = useMemo(
+    () => renderPinnedRows(currentPinnedBottom, 'bottom'),
+    [renderPinnedRows, currentPinnedBottom],
+  );
+
   // ─── JSX ───────────────────────────────────────────────
 
   return (
@@ -928,6 +1210,7 @@ export const Grid = memo(function Grid({
           {filterPopover}
         </div>
       </div>
+      {pinnedTopRowsEl}
       <div
         ref={viewportRef}
         className="gs-viewport"
@@ -951,6 +1234,7 @@ export const Grid = memo(function Grid({
           {editorOverlay}
         </div>
       </div>
+      {pinnedBottomRowsEl}
     </div>
   );
 });

@@ -17,6 +17,7 @@ export {
   type Row,
   type ColumnDef,
   type ColumnType,
+  type PinPosition,
   type SelectOption,
   type SortState,
   type SortEntry,
