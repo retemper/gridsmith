@@ -102,6 +102,24 @@ describe('fill-handle plugin', () => {
       expect(fill.inferPattern(['foo', 'bar']).kind).toBe('copy');
       expect(fill.inferPattern([1, 'a']).kind).toBe('copy');
     });
+
+    it('treats a single-cell seed that matches a built-in list as a list sequence', () => {
+      const { fill } = setup();
+      expect(fill.inferPattern(['Jan']).kind).toBe('month-name-short');
+      expect(fill.inferPattern(['January']).kind).toBe('month-name-long');
+    });
+
+    it('treats a single-cell seed that matches a custom list as a custom-list sequence', () => {
+      const { fill } = setup();
+      fill.registerCustomList(['Red', 'Green', 'Blue']);
+      expect(fill.inferPattern(['Green']).kind).toBe('custom-list');
+    });
+
+    it('falls back to copy for constant date sequences', () => {
+      const { fill } = setup();
+      const d = new Date(2026, 0, 1);
+      expect(fill.inferPattern([d, d, d]).kind).toBe('copy');
+    });
   });
 
   describe('generateValues', () => {
@@ -302,6 +320,33 @@ describe('fill-handle plugin', () => {
       expect(grid.getCell(3, 'a')).toBe('Red');
       expect(grid.getCell(4, 'a')).toBe('Green');
       expect(grid.getCell(5, 'a')).toBe('Blue');
+    });
+
+    it('exposes registered custom lists via getCustomLists', () => {
+      const { fill } = setup();
+      fill.registerCustomList(['Small', 'Medium', 'Large']);
+      const lists = fill.getCustomLists();
+      expect(lists).toHaveLength(1);
+      expect(lists[0]).toEqual(['Small', 'Medium', 'Large']);
+    });
+
+    it('extrapolates day-of-week long names and month-name short series', () => {
+      const { fill } = setup();
+      const days = fill.generateValues(['Monday', 'Tuesday'], 3, 'forward');
+      expect(days).toEqual(['Wednesday', 'Thursday', 'Friday']);
+      const months = fill.generateValues(['Jan', 'Feb'], 2, 'forward');
+      expect(months).toEqual(['Mar', 'Apr']);
+    });
+
+    it('fills columns to the left of the source when target extends leftward', () => {
+      const { grid, fill } = setup();
+      grid.setCell(0, 'b', 1);
+      grid.setCell(0, 'c', 2);
+      fill.fill({
+        source: range(0, 0, 'b', 'c'),
+        target: range(0, 0, 'a', 'c'),
+      });
+      expect(grid.getCell(0, 'a')).toBe(0);
     });
   });
 });
