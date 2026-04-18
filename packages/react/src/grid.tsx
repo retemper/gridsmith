@@ -21,6 +21,7 @@ import {
   createFillHandlePlugin,
   createHistoryPlugin,
   createSelectionPlugin,
+  createValidationPlugin,
   flattenColumns,
   getHeaderDepth,
   getTotalHeight,
@@ -127,12 +128,14 @@ export const Grid = memo(function Grid({
     const clipboardPlugin = createClipboardPlugin();
     const historyPlugin = createHistoryPlugin();
     const fillHandlePlugin = createFillHandlePlugin();
+    const validationPlugin = createValidationPlugin();
     const builtins = [
       editingPlugin,
       selectionPlugin,
       clipboardPlugin,
       historyPlugin,
       fillHandlePlugin,
+      validationPlugin,
     ];
     return plugins ? [...builtins, ...plugins] : builtins;
   });
@@ -268,12 +271,16 @@ export const Grid = memo(function Grid({
   const indexMap = useSignalValue(grid.indexMap);
   const totalRows = indexMap.length;
 
-  // Data version counter — triggers row re-render on cell/data changes
+  // Data version counter — triggers row re-render on cell/data changes.
+  // Validation state changes that leave the underlying cell value untouched
+  // (pending → invalid, async settle) also bump the counter so invalid-cell
+  // decoration and tooltips stay in sync with the plugin's state.
   const [dataVersion, setDataVersion] = useState(0);
   useEffect(() => {
     const unsubs = [
       grid.subscribe('data:change', () => setDataVersion((v) => v + 1)),
       grid.subscribe('data:rowsUpdate', () => setDataVersion((v) => v + 1)),
+      grid.subscribe('validation:change', () => setDataVersion((v) => v + 1)),
     ];
     return () => unsubs.forEach((u) => u());
   }, [grid]);

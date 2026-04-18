@@ -9,6 +9,7 @@ export { useGridSelection } from './use-grid-selection';
 export type { SelectionState } from './use-grid-selection';
 export { useGridClipboard } from './use-grid-clipboard';
 export { useGridFillHandle } from './use-grid-fill-handle';
+export { useGridValidation } from './use-grid-validation';
 
 // Types
 export type { GridProps, GridColumnDef, CellRendererProps, CellEditorProps } from './types';
@@ -49,10 +50,19 @@ export {
   type FillOperation,
   type FillHandlePluginOptions,
   type FillHandlePluginApi,
+  type ValidationResult,
+  type ValidationContext,
+  type ValidationMode,
+  type ValidationErrorState,
+  type ValidationError,
+  type ValidationPluginApi,
+  type SyncValidator,
+  type AsyncValidator,
   createClipboardPlugin,
   createEditingPlugin,
   createFillHandlePlugin,
   createHistoryPlugin,
+  createValidationPlugin,
   flattenColumns,
   getHeaderDepth,
   buildHeaderRows,

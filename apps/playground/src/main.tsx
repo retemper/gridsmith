@@ -11,8 +11,21 @@ import { createRoot } from 'react-dom/client';
 
 const sampleColumns: GridColumnDef[] = [
   { id: 'id', header: '#', width: 60, pin: 'left', editable: false, sortable: false },
-  { id: 'name', header: 'Name', width: 150, type: 'text' },
-  { id: 'age', header: 'Age', width: 80, type: 'number' },
+  {
+    id: 'name',
+    header: 'Name',
+    width: 150,
+    type: 'text',
+    validate: (v) => (typeof v === 'string' && v.length > 0) || 'Name is required',
+  },
+  {
+    id: 'age',
+    header: 'Age',
+    width: 80,
+    type: 'number',
+    validationMode: 'warn',
+    validate: (v) => (typeof v === 'number' && v >= 0 && v < 150) || 'Age must be 0–149',
+  },
   { id: 'city', header: 'City', width: 120, type: 'text' },
   {
     id: 'department',
@@ -66,7 +79,8 @@ function App() {
       <h1 style={{ margin: '0 0 0.5rem' }}>Gridsmith Playground</h1>
       <p style={{ margin: '0 0 1rem', color: '#64748b' }}>
         v{VERSION} — Drag column borders to resize, drag headers to reorder. # and Actions columns
-        are pinned. Rows 0, 1 pinned to top.
+        are pinned. Rows 0, 1 pinned to top. Name is required (reject). Age must be 0–149 (warn —
+        invalid values commit with a red border).
       </p>
       <div
         style={{ flex: 1, border: '1px solid #e2e8f0', borderRadius: '8px', overflow: 'hidden' }}

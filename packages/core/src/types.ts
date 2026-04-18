@@ -46,6 +46,24 @@ export interface ColumnDef {
   /** Custom comparator for sorting this column. Overrides the default. */
   comparator?: CellComparator;
   /**
+   * Synchronous validator. Return `true` when the value is valid or a string
+   * error message when it isn't. Runs on commit; the result is forwarded to
+   * the validation plugin which records/decorates errors.
+   */
+  validate?: SyncValidator;
+  /**
+   * Asynchronous validator. Runs alongside `validate` (not a fallback). The
+   * cell is flagged `pending` until the promise settles; async failures
+   * never block commit — they only surface as a post-hoc error.
+   */
+  asyncValidate?: AsyncValidator;
+  /**
+   * How a synchronous validation failure is handled on commit.
+   * - `reject` (default): cancel the commit, keep the original value.
+   * - `warn`: accept the value but record the error for UI feedback.
+   */
+  validationMode?: ValidationMode;
+  /**
    * Nested child columns. When set, this entry is treated as a header group:
    * it renders a spanning header cell above its children and does not carry
    * its own data. Data operations (sort/filter/edit) run on leaf columns only.
@@ -162,6 +180,7 @@ export interface GridEvents {
   'transaction:begin': { depth: number };
   'transaction:end': { depth: number };
   'history:change': { canUndo: boolean; canRedo: boolean; undoSize: number; redoSize: number };
+  'validation:change': { errors: readonly ValidationError[] };
   'plugin:ready': { name: string };
   ready: undefined;
   destroy: undefined;
@@ -402,6 +421,96 @@ export interface HistoryPluginApi {
   getUndoSize(): number;
   getRedoSize(): number;
   setMaxSize(size: number): void;
+}
+
+// ─── Validation ───────────────────────────────────────────
+
+/**
+ * Outcome of a single validator. `true` means valid; any string is the error
+ * message to surface. Using a plain string (rather than a rich object) keeps
+ * the return type of most handwritten validators trivial to read.
+ */
+export type ValidationResult = true | string;
+
+/** Context passed to validators at call-time. */
+export interface ValidationContext {
+  /** View-index at validation time. Use `dataIndex` for identity across sort/filter. */
+  rowIndex: number;
+  /** Stable data-index of the row (survives sort and filter). */
+  dataIndex: number;
+  columnId: string;
+  /**
+   * Snapshot of the row at validation time. Reflects the *committed* value of
+   * each cell — the candidate value being validated is passed separately as
+   * the validator's first argument, not via `row[columnId]`.
+   */
+  row: Row;
+  /**
+   * Value the cell held before the edit in progress. For revalidations not
+   * triggered by an edit, equals the cell's current value.
+   */
+  originalValue: CellValue;
+}
+
+export type SyncValidator = (value: CellValue, ctx: ValidationContext) => ValidationResult;
+export type AsyncValidator = (
+  value: CellValue,
+  ctx: ValidationContext,
+) => Promise<ValidationResult>;
+
+/** Determines whether a failing sync validator blocks the commit. */
+export type ValidationMode = 'reject' | 'warn';
+
+/**
+ * `invalid` — a validator returned an error message. `pending` — an async
+ * validator is still running for the cell (no resolved verdict yet).
+ */
+export type ValidationErrorState = 'invalid' | 'pending';
+
+export interface ValidationError {
+  /** Stable data-index of the row (not a view index). */
+  dataIndex: number;
+  columnId: string;
+  /** Error message from the failing validator; empty string while pending. */
+  message: string;
+  value: CellValue;
+  state: ValidationErrorState;
+}
+
+export interface ValidationPluginApi {
+  /**
+   * Run sync validation for the current (or supplied) value of a cell. The
+   * internal error state and cell decoration are updated as a side-effect, and
+   * `'validation:change'` is emitted when the verdict for the cell changes.
+   * Async validators attached to the same column are kicked off in the
+   * background; their resolution updates the error state asynchronously.
+   */
+  validateCell(rowIndex: number, columnId: string, value?: CellValue): ValidationResult;
+  /**
+   * Run sync + async validation and resolve with the async result (or the
+   * sync failure, if sync failed). Cell is flagged `pending` while running.
+   */
+  validateCellAsync(
+    rowIndex: number,
+    columnId: string,
+    value?: CellValue,
+  ): Promise<ValidationResult>;
+  /** Validate every cell that has at least one validator. Resolves with the final error set. */
+  validateAll(): Promise<readonly ValidationError[]>;
+  /** Current error/pending record for a view-cell, or `null` if valid. */
+  getError(rowIndex: number, columnId: string): ValidationError | null;
+  /** `true` if an async validation is still in flight for the cell. */
+  isPending(rowIndex: number, columnId: string): boolean;
+  /** Snapshot of every current error (invalid or pending). */
+  getErrors(): readonly ValidationError[];
+  /**
+   * Drop recorded errors. Scope is selected by which args are passed:
+   * - `()` — clear everything.
+   * - `(rowIndex)` — clear every error on that row.
+   * - `(undefined, columnId)` — clear every error on that column.
+   * - `(rowIndex, columnId)` — clear a single cell.
+   */
+  clearErrors(rowIndex?: number, columnId?: string): void;
 }
 
 // ─── Plugin ────────────────────────────────────────────────
