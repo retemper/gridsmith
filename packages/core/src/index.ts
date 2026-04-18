@@ -25,6 +25,9 @@ export type { EventBus, EventHandler } from './events';
 // Editing
 export { createEditingPlugin } from './editing';
 
+// Selection
+export { createSelectionPlugin } from './selection';
+
 // Column grouping
 export {
   flattenColumns,
@@ -59,6 +62,11 @@ export type {
   EditState,
   EditorDefinition,
   EditingPluginApi,
+  CellCoord,
+  CellRange,
+  SelectionState,
+  SelectionMode,
+  SelectionPluginApi,
   CellDecoration,
   CellDecorator,
   PluginContext,

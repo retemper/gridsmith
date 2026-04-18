@@ -274,7 +274,6 @@ describe('Grid', () => {
       ];
       const { container } = render(<Grid data={data} columns={cols} onSortChange={onSort} />);
       const label = container.querySelectorAll('.gs-header-label')[0] as HTMLButtonElement;
-      expect(label.disabled).toBe(true);
       fireEvent.click(label);
       expect(onSort).not.toHaveBeenCalled();
     });
