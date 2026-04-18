@@ -193,6 +193,51 @@ describe('validation plugin', () => {
       expect(validation.getError(0, 'name')).toBeNull();
     });
 
+    it('treats a rejecting async validator as a failure with the exception message', async () => {
+      const { validation } = setup([
+        {
+          id: 'name',
+          header: 'Name',
+          type: 'text',
+          asyncValidate: () => Promise.reject(new Error('upstream down')),
+        },
+        { id: 'age', header: 'Age', type: 'number' },
+      ]);
+      const result = await validation.validateCellAsync(0, 'name', 'x');
+      expect(result).toBe('upstream down');
+      expect(validation.getError(0, 'name')?.message).toBe('upstream down');
+    });
+
+    it('kicks off async validation from the sync `validateCell` entry point', async () => {
+      // Wrap the validator so the test can await its full resolution chain.
+      let settled!: Promise<true | string>;
+      const { grid, validation } = setup([
+        {
+          id: 'name',
+          header: 'Name',
+          type: 'text',
+          asyncValidate: () => {
+            settled = Promise.resolve('async fail' as const);
+            return settled;
+          },
+        },
+        { id: 'age', header: 'Age', type: 'number' },
+      ]);
+      // Listen for the change event triggered when the async result lands.
+      const settledEvent = new Promise<void>((resolve) => {
+        const off = grid.subscribe('validation:change', ({ errors }) => {
+          if (errors.some((e) => e.state === 'invalid')) {
+            off();
+            resolve();
+          }
+        });
+      });
+      // Sync path returns true; async runs in the background.
+      expect(validation.validateCell(0, 'name', 'x')).toBe(true);
+      await settledEvent;
+      expect(validation.getError(0, 'name')?.message).toBe('async fail');
+    });
+
     it('discards stale async results when a newer validation supersedes them', async () => {
       const first = deferred<true | string>();
       const second = deferred<true | string>();
@@ -336,6 +381,29 @@ describe('validation plugin', () => {
       expect(validation.getError(0, 'name')?.message).toBe('Required');
       grid.setCell(0, 'name', 'fixed');
       expect(validation.getError(0, 'name')).toBeNull();
+    });
+
+    it('runs async validators on writes from outside the editing pipeline', async () => {
+      const { grid, validation } = setup([
+        {
+          id: 'name',
+          header: 'Name',
+          type: 'text',
+          asyncValidate: () => Promise.resolve('async fail' as const),
+        },
+        { id: 'age', header: 'Age', type: 'number' },
+      ]);
+      const settledEvent = new Promise<void>((resolve) => {
+        const off = grid.subscribe('validation:change', ({ errors }) => {
+          if (errors.some((e) => e.state === 'invalid')) {
+            off();
+            resolve();
+          }
+        });
+      });
+      grid.setCell(0, 'name', 'x');
+      await settledEvent;
+      expect(validation.getError(0, 'name')?.message).toBe('async fail');
     });
 
     it('re-validates writes to currently-hidden rows via setCellByDataIndex', () => {
