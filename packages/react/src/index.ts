@@ -34,6 +34,11 @@ export {
   type GridInstance,
   type GridPlugin,
   type GridOptions,
+  type HeaderCell,
   createEditingPlugin,
+  flattenColumns,
+  getHeaderDepth,
+  buildHeaderRows,
+  columnStructureKey,
   VERSION,
 } from '@gridsmith/core';

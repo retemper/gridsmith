@@ -28,10 +28,15 @@ export interface CellEditorProps {
 }
 
 /** Extended column definition with React-specific fields. */
-export interface GridColumnDef extends ColumnDef {
+export interface GridColumnDef extends Omit<ColumnDef, 'children'> {
   cellRenderer?: (props: CellRendererProps) => ReactNode;
   /** Custom React editor component for this column. */
   cellEditor?: (props: CellEditorProps) => ReactNode;
+  /**
+   * Nested child column definitions. Setting this makes the entry a header
+   * group that spans its children's columns and carries no data.
+   */
+  children?: GridColumnDef[];
 }
 
 /** Props for the Grid component. */

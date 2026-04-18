@@ -288,7 +288,7 @@ describe('resizeColumn', () => {
     expect(cols.find((c) => c.id === 'name')!.width).toBe(200);
   });
 
-  it('emits column:resize and columns:update events', () => {
+  it('emits column:resize (and skips columns:update since leaves are structurally unchanged)', () => {
     const grid = createGrid({ data: sampleData, columns: sampleColumns });
     const resizeFn = vi.fn();
     const updateFn = vi.fn();
@@ -297,7 +297,7 @@ describe('resizeColumn', () => {
 
     grid.resizeColumn('age', 150);
     expect(resizeFn).toHaveBeenCalledWith({ columnId: 'age', width: 150 });
-    expect(updateFn).toHaveBeenCalledTimes(1);
+    expect(updateFn).not.toHaveBeenCalled();
   });
 
   it('clamps to minWidth and maxWidth', () => {
@@ -408,6 +408,115 @@ describe('pinned rows', () => {
 
     grid.setPinnedBottomRows([2]);
     expect(grid.pinnedBottomRows.get()).toEqual([2]);
+  });
+});
+
+describe('grouped columns', () => {
+  const groupedColumns: ColumnDef[] = [
+    { id: 'name', header: 'Name', type: 'text' },
+    {
+      id: 'location',
+      header: 'Location',
+      children: [
+        { id: 'city', header: 'City', type: 'text' },
+        { id: 'country', header: 'Country', type: 'text' },
+      ],
+    },
+  ];
+
+  const groupedData: Row[] = [
+    { name: 'Alice', city: 'Seoul', country: 'KR' },
+    { name: 'Bob', city: 'Tokyo', country: 'JP' },
+  ];
+
+  it('exposes the tree via columnDefs and flat leaves via columns', () => {
+    const grid = createGrid({ data: groupedData, columns: groupedColumns });
+    expect(grid.columnDefs.get().map((c) => c.id)).toEqual(['name', 'location']);
+    expect(grid.columns.get().map((c) => c.id)).toEqual(['name', 'city', 'country']);
+  });
+
+  it('allows cell operations on leaf columns', () => {
+    const grid = createGrid({ data: groupedData, columns: groupedColumns });
+    expect(grid.getCell(0, 'city')).toBe('Seoul');
+    grid.setCell(1, 'country', 'Japan');
+    expect(grid.getCell(1, 'country')).toBe('Japan');
+  });
+
+  it('sorts and filters on leaf columns', () => {
+    const grid = createGrid({ data: groupedData, columns: groupedColumns });
+    grid.sortState.set([{ columnId: 'city', direction: 'desc' }]);
+    expect(grid.getCell(0, 'name')).toBe('Bob'); // Tokyo > Seoul
+    grid.filterState.set([{ columnId: 'country', operator: 'eq', value: 'KR' }]);
+    expect(grid.rowCount).toBe(1);
+    expect(grid.getCell(0, 'name')).toBe('Alice');
+  });
+
+  it('resizeColumn updates the width on the leaf inside the tree', () => {
+    const grid = createGrid({ data: groupedData, columns: groupedColumns });
+    grid.resizeColumn('city', 150);
+    const location = grid.columnDefs.get().find((c) => c.id === 'location');
+    const city = location?.children?.find((c) => c.id === 'city');
+    expect(city?.width).toBe(150);
+    // Flat leaf view reflects the update.
+    expect(grid.columns.get().find((c) => c.id === 'city')?.width).toBe(150);
+  });
+
+  it('emits columnDefs:update and column:resize but not columns:update on resize', () => {
+    const grid = createGrid({ data: groupedData, columns: groupedColumns });
+    const defsFn = vi.fn();
+    const colsFn = vi.fn();
+    const resizeFn = vi.fn();
+    grid.events.on('columnDefs:update', defsFn);
+    grid.events.on('columns:update', colsFn);
+    grid.events.on('column:resize', resizeFn);
+
+    grid.resizeColumn('city', 160);
+    expect(defsFn).toHaveBeenCalledTimes(1);
+    expect(resizeFn).toHaveBeenCalledTimes(1);
+    // Leaf list is structurally unchanged; only widths changed.
+    expect(colsFn).not.toHaveBeenCalled();
+  });
+
+  it('reorder is a no-op when the tree has groups', () => {
+    const grid = createGrid({ data: groupedData, columns: groupedColumns });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fn = vi.fn();
+    grid.events.on('column:reorder', fn);
+    grid.reorderColumn(0, 1);
+    expect(fn).not.toHaveBeenCalled();
+    expect(grid.columnDefs.get().map((c) => c.id)).toEqual(['name', 'location']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it('setColumns accepts a tree and re-derives leaves', () => {
+    const grid = createGrid({ data: groupedData, columns: groupedColumns });
+    const newCols: ColumnDef[] = [
+      {
+        id: 'group',
+        header: 'Group',
+        children: [
+          { id: 'name', header: 'Name' },
+          { id: 'city', header: 'City' },
+        ],
+      },
+    ];
+    grid.setColumns(newCols);
+    expect(grid.columnDefs.get()[0].id).toBe('group');
+    expect(grid.columns.get().map((c) => c.id)).toEqual(['name', 'city']);
+  });
+
+  it('pin propagates from group to leaves via the flat view', () => {
+    const cols: ColumnDef[] = [
+      {
+        id: 'g',
+        header: 'G',
+        pin: 'left',
+        children: [{ id: 'a', header: 'A' }],
+      },
+    ];
+    const grid = createGrid({ data: [], columns: cols });
+    expect(grid.columns.get()[0].pin).toBe('left');
   });
 });
 

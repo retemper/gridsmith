@@ -4,11 +4,16 @@ import {
   type EditState,
   type FilterEntry,
   type GridInstance,
+  type HeaderCell,
   type Row,
   type VisibleRange,
+  buildHeaderRows,
   calculateVisibleRange,
+  columnStructureKey,
   computeColumnLayout,
   createEditingPlugin,
+  flattenColumns,
+  getHeaderDepth,
   getTotalHeight,
   DEFAULT_CONFIG,
 } from '@gridsmith/core';
@@ -210,6 +215,7 @@ export const Grid = memo(function Grid({
   // ─── Reactive state from core ──────────────────────────
 
   const currentColumns = useSignalValue(grid.columns);
+  const currentColumnDefs = useSignalValue(grid.columnDefs);
   const currentSort = useSignalValue(grid.sortState);
   const currentFilter = useSignalValue(grid.filterState);
   const indexMap = useSignalValue(grid.indexMap);
@@ -232,9 +238,22 @@ export const Grid = memo(function Grid({
     [currentColumns, defaultColumnWidth],
   );
 
+  // Header depth and row layout depend only on the tree's shape, not on leaf
+  // widths/visibility. Resizing a column mutates the tree reference but leaves
+  // the structure key unchanged, so we avoid rebuilding either memo.
+  const structureKey = useMemo(() => columnStructureKey(currentColumnDefs), [currentColumnDefs]);
+  const headerDepth = useMemo(() => Math.max(1, getHeaderDepth(currentColumnDefs)), [structureKey]);
+  const totalHeaderHeight = headerHeight * headerDepth;
+
+  const headerRows = useMemo(() => buildHeaderRows(currentColumnDefs), [structureKey]);
+
   const totalHeight = getTotalHeight(totalRows, rowHeight);
 
   const columnIds = useMemo(() => currentColumns.map((c) => c.id), [currentColumns]);
+
+  // Leaf view of the caller-supplied column tree, preserving `cellRenderer`
+  // and other React-only fields. Aligns 1:1 with `currentColumns` order.
+  const leafGridColumns = useMemo(() => flattenColumns(columns), [columns]);
 
   // ─── Viewport & visible range ──────────────────────────
 
@@ -468,9 +487,30 @@ export const Grid = memo(function Grid({
 
   // ─── Render header ─────────────────────────────────────
 
-  const renderHeaderCell = useCallback(
-    (col: (typeof currentColumns)[number], i: number) => {
-      if (col.visible === false) return null;
+  const hasGroups = useMemo(
+    () => currentColumnDefs.some((c) => c.children && c.children.length > 0),
+    [currentColumnDefs],
+  );
+
+  const spanExtent = useCallback(
+    (cell: HeaderCell): { left: number; width: number } => {
+      const left = columnLayout.offsets[cell.colStart] ?? 0;
+      let width = 0;
+      for (let i = cell.colStart; i < cell.colStart + cell.colSpan; i++) {
+        const leaf = currentColumns[i];
+        if (leaf && leaf.visible === false) continue;
+        width += columnLayout.widths[i] ?? 0;
+      }
+      return { left, width };
+    },
+    [columnLayout, currentColumns],
+  );
+
+  const renderLeafHeaderCell = useCallback(
+    (cell: HeaderCell, rowIndex: number) => {
+      const col = currentColumns[cell.colStart];
+      if (!col || col.visible === false) return null;
+      const i = cell.colStart;
       const sortInfo = sortIndexByCol.get(col.id);
       const hasFilter = filterByCol.has(col.id);
       const sortable = col.sortable !== false;
@@ -479,6 +519,11 @@ export const Grid = memo(function Grid({
       const resizable = col.resizable !== false;
       const isPinned = col.pin === 'left' || col.pin === 'right';
       const isDragOver = dragOverIndex === i;
+      // Reorder drag is disabled when groups exist — swapping leaves across
+      // group boundaries is deferred to Phase 2. Sort/filter/resize still work.
+      const draggable = !hasGroups;
+      const top = rowIndex * headerHeight;
+      const height = cell.rowSpan * headerHeight;
 
       return (
         <div
@@ -489,16 +534,17 @@ export const Grid = memo(function Grid({
             sortInfo ? (sortInfo.direction === 'asc' ? 'ascending' : 'descending') : 'none'
           }
           data-col={col.id}
-          draggable
-          onDragStart={(e) => handleDragStart(e, col.id, i)}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
-          onDragEnd={handleDragEnd}
+          draggable={draggable}
+          onDragStart={draggable ? (e) => handleDragStart(e, col.id, i) : undefined}
+          onDragOver={draggable ? handleDragOver : undefined}
+          onDrop={draggable ? handleDrop : undefined}
+          onDragEnd={draggable ? handleDragEnd : undefined}
           style={{
             position: 'absolute',
             left: columnLayout.offsets[i],
+            top,
             width: columnLayout.widths[i],
-            height: headerHeight,
+            height,
             boxSizing: 'border-box',
             overflow: 'hidden',
             display: 'flex',
@@ -590,6 +636,7 @@ export const Grid = memo(function Grid({
       handleHeaderSortClick,
       openFilterCol,
       dragOverIndex,
+      hasGroups,
       handleDragStart,
       handleDragOver,
       handleDrop,
@@ -601,10 +648,48 @@ export const Grid = memo(function Grid({
     ],
   );
 
-  const headerCells = useMemo(
-    () => currentColumns.map((col, i) => renderHeaderCell(col, i)),
-    [currentColumns, renderHeaderCell],
+  const renderGroupHeaderCell = useCallback(
+    (cell: HeaderCell, rowIndex: number) => {
+      const { left, width } = spanExtent(cell);
+      if (width === 0) return null;
+      const top = rowIndex * headerHeight;
+      return (
+        <div
+          key={`group:${cell.column.id}:${cell.colStart}`}
+          className="gs-header-cell gs-header-cell--group"
+          role="columnheader"
+          data-col-group={cell.column.id}
+          style={{
+            position: 'absolute',
+            left,
+            top,
+            width,
+            height: headerHeight,
+            boxSizing: 'border-box',
+            overflow: 'hidden',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            userSelect: 'none',
+            padding: '0 6px',
+          }}
+        >
+          {cell.column.header}
+        </div>
+      );
+    },
+    [spanExtent, headerHeight],
   );
+
+  const headerCells = useMemo(() => {
+    const out: ReactNode[] = [];
+    for (let r = 0; r < headerRows.length; r++) {
+      for (const cell of headerRows[r]) {
+        out.push(cell.isLeaf ? renderLeafHeaderCell(cell, r) : renderGroupHeaderCell(cell, r));
+      }
+    }
+    return out;
+  }, [headerRows, renderLeafHeaderCell, renderGroupHeaderCell]);
 
   // ─── Filter popover ────────────────────────────────────
 
@@ -620,12 +705,19 @@ export const Grid = memo(function Grid({
       <FilterPopover
         column={col}
         entry={entry}
-        style={{ top: headerHeight, left }}
+        style={{ top: totalHeaderHeight, left }}
         onApply={(e) => handleFilterApply(col.id, e)}
         onClose={() => setOpenFilterCol(null)}
       />
     );
-  }, [openFilterCol, currentColumns, filterByCol, columnLayout, headerHeight, handleFilterApply]);
+  }, [
+    openFilterCol,
+    currentColumns,
+    filterByCol,
+    columnLayout,
+    totalHeaderHeight,
+    handleFilterApply,
+  ]);
 
   // ─── Render rows ───────────────────────────────────────
 
@@ -648,7 +740,7 @@ export const Grid = memo(function Grid({
       let rowData: Row | null = null;
 
       for (let c = visibleRange.colStart; c <= visibleRange.colEnd; c++) {
-        const col = columns[c];
+        const col = leafGridColumns[c];
         if (!col || col.visible === false) continue;
 
         const value = grid.getCell(r, col.id);
@@ -732,7 +824,7 @@ export const Grid = memo(function Grid({
   }, [
     visibleRange,
     totalRows,
-    columns,
+    leafGridColumns,
     grid,
     columnLayout,
     columnIds,
@@ -1060,7 +1152,7 @@ export const Grid = memo(function Grid({
         key={`${editState.rowIndex}:${editState.columnId}`}
         grid={grid}
         editingApi={editingApi}
-        columns={columns}
+        columns={leafGridColumns}
         columnIndex={colIndex}
         rowIndex={editState.rowIndex}
         editValue={editState.value}
@@ -1076,7 +1168,7 @@ export const Grid = memo(function Grid({
     rowHeight,
     grid,
     editingApi,
-    columns,
+    leafGridColumns,
     handleCommitAndMoveVertical,
   ]);
 
@@ -1191,10 +1283,10 @@ export const Grid = memo(function Grid({
         className="gs-header"
         style={{
           // `overflow: visible` so the filter popover (which anchors at the
-          // header cell's left edge and drops below `headerHeight`) is not
+          // header cell's left edge and drops below the header) is not
           // clipped by the header element's bounding box.
           position: 'relative',
-          height: headerHeight,
+          height: totalHeaderHeight,
           flexShrink: 0,
         }}
       >
@@ -1203,7 +1295,7 @@ export const Grid = memo(function Grid({
           style={{
             position: 'relative',
             width: columnLayout.totalWidth,
-            height: headerHeight,
+            height: totalHeaderHeight,
           }}
         >
           {headerCells}

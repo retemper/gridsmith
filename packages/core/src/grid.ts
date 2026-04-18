@@ -1,3 +1,4 @@
+import { flattenColumns, setLeafWidth } from './column-group';
 import { createEventBus } from './events';
 import { buildIndexMap } from './index-map';
 import { createPluginManager } from './plugin';
@@ -27,7 +28,10 @@ export function createGrid(options: GridOptions): GridInstance {
   let data: Row[] = options.data.map((row) => ({ ...row }));
 
   // Reactive state
-  const columns = signal<ColumnDef[]>([...initialColumns]);
+  // `columnDefs` holds the original tree (with `children`); `columns` holds
+  // the flattened leaf list used by all data ops and layout.
+  const columnDefs = signal<ColumnDef[]>([...initialColumns]);
+  const columns = computed<ColumnDef[]>(() => flattenColumns(columnDefs.get()));
   const sortState = signal<SortState>([]);
   const filterState = signal<FilterState>([]);
   const pinnedTopRows = signal<number[]>([...initialPinnedTop]);
@@ -66,6 +70,7 @@ export function createGrid(options: GridOptions): GridInstance {
     },
 
     columns,
+    columnDefs,
     sortState,
     filterState,
     indexMap,
@@ -120,48 +125,66 @@ export function createGrid(options: GridOptions): GridInstance {
 
     setColumns(newColumns: ColumnDef[]): void {
       assertAlive();
-      columns.set([...newColumns]);
+      const nextTree = [...newColumns];
+      columnDefs.set(nextTree);
+      events.emit('columnDefs:update', { columnDefs: nextTree });
       events.emit('columns:update', { columns: columns.get() });
     },
 
     resizeColumn(columnId: string, width: number): void {
       assertAlive();
-      const cols = columns.get();
-      const idx = cols.findIndex((c) => c.id === columnId);
-      if (idx === -1) return;
-      const col = cols[idx];
-      const min = col.minWidth ?? 30;
-      const max = col.maxWidth ?? Infinity;
+      const leafs = columns.get();
+      const leaf = leafs.find((c) => c.id === columnId);
+      if (!leaf) return;
+      const min = leaf.minWidth ?? 30;
+      const max = leaf.maxWidth ?? Infinity;
       const clamped = Math.max(min, Math.min(max, width));
-      if (col.width === clamped) return;
-      const next = cols.map((c, i) => (i === idx ? { ...c, width: clamped } : c));
-      columns.set(next);
+      if (leaf.width === clamped) return;
+
+      const result = setLeafWidth(columnDefs.get(), columnId, clamped);
+      if (!result.changed) return;
+      columnDefs.set(result.columns);
       events.emit('column:resize', { columnId, width: clamped });
-      events.emit('columns:update', { columns: next });
+      events.emit('columnDefs:update', { columnDefs: result.columns });
+      // Intentionally no `columns:update`: the leaf list is structurally
+      // unchanged (same ids, order, visibility). Consumers that only care
+      // about widths should listen to `column:resize`; the `columns` signal
+      // still fires because `columnDefs` changed.
     },
 
     reorderColumn(fromIndex: number, toIndex: number): void {
       assertAlive();
-      const cols = columns.get();
+      const tree = columnDefs.get();
+      // Reorder is only defined when the tree is flat. With header groups,
+      // swapping siblings across groups would either break the tree or only
+      // work within a single group — deferred to Phase 2.
+      const hasGroups = tree.some((c) => c.children && c.children.length > 0);
+      if (hasGroups) {
+        console.warn(
+          '[gridsmith] reorderColumn is a no-op when columnDefs contains header groups; cross-group reordering is deferred to Phase 2.',
+        );
+        return;
+      }
       if (
         fromIndex === toIndex ||
         fromIndex < 0 ||
-        fromIndex >= cols.length ||
+        fromIndex >= tree.length ||
         toIndex < 0 ||
-        toIndex >= cols.length
+        toIndex >= tree.length
       )
         return;
-      const col = cols[fromIndex];
-      const next = [...cols];
+      const col = tree[fromIndex];
+      const next = [...tree];
       next.splice(fromIndex, 1);
       next.splice(toIndex, 0, col);
-      columns.set(next);
+      columnDefs.set(next);
       events.emit('column:reorder', {
         columnId: col.id,
         fromIndex,
         toIndex,
       });
-      events.emit('columns:update', { columns: next });
+      events.emit('columnDefs:update', { columnDefs: next });
+      events.emit('columns:update', { columns: columns.get() });
     },
 
     batchUpdate(fn: () => void): void {

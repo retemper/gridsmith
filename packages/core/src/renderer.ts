@@ -1,3 +1,4 @@
+import { buildHeaderRows, getHeaderDepth, type HeaderCell } from './column-group';
 import type { Unsubscribe } from './signal';
 import type { GridInstance, ColumnDef, VisibleRange } from './types';
 import {
@@ -38,7 +39,9 @@ export interface RendererInstance {
 const CLS = {
   root: 'gs-grid',
   header: 'gs-header',
+  headerRow: 'gs-header-row',
   headerCell: 'gs-header-cell',
+  headerGroup: 'gs-header-cell--group',
   viewport: 'gs-viewport',
   canvas: 'gs-canvas',
   row: 'gs-row',
@@ -56,7 +59,7 @@ export function createRenderer(options: RendererOptions): RendererInstance {
     defaultColumnWidth: options.defaultColumnWidth ?? DEFAULT_CONFIG.defaultColumnWidth,
   };
 
-  const headerHeight = options.headerHeight ?? config.rowHeight;
+  const headerRowHeight = options.headerHeight ?? config.rowHeight;
 
   // ─── DOM Structure ────────────────────────────────────
   // <div.gs-grid>
@@ -77,8 +80,11 @@ export function createRenderer(options: RendererOptions): RendererInstance {
   const viewport = el('div', CLS.viewport);
   const canvas = el('div', CLS.canvas);
 
+  let headerDepth = Math.max(1, getHeaderDepth(grid.columnDefs.get()));
+  let totalHeaderHeight = headerRowHeight * headerDepth;
+
   root.style.cssText = 'position:relative;overflow:hidden;';
-  header.style.cssText = `position:relative;height:${headerHeight}px;overflow:hidden;display:flex;`;
+  header.style.cssText = `position:relative;height:${totalHeaderHeight}px;overflow:hidden;`;
   viewport.style.cssText = 'position:relative;overflow:auto;will-change:transform;';
   canvas.style.cssText = 'position:relative;';
 
@@ -109,25 +115,51 @@ export function createRenderer(options: RendererOptions): RendererInstance {
     canvas.style.height = `${totalHeight}px`;
     canvas.style.width = `${columnLayout.totalWidth}px`;
     header.style.width = `${columnLayout.totalWidth}px`;
+    header.style.height = `${totalHeaderHeight}px`;
 
     // Viewport height = container height minus header
     const containerHeight = container.clientHeight;
-    viewport.style.height = `${containerHeight - headerHeight}px`;
+    viewport.style.height = `${containerHeight - totalHeaderHeight}px`;
   }
 
   // ─── Header Rendering ────────────────────────────────
 
   function renderHeader() {
     header.innerHTML = '';
-    const columns = grid.columns.get();
-    for (let c = 0; c < columns.length; c++) {
-      const col = columns[c];
-      if (col.visible === false) continue;
-      const cell = el('div', CLS.headerCell);
-      cell.textContent = col.header;
-      cell.style.cssText = `position:absolute;left:${columnLayout.offsets[c]}px;width:${columnLayout.widths[c]}px;height:${headerHeight}px;box-sizing:border-box;overflow:hidden;`;
-      header.appendChild(cell);
+    const tree = grid.columnDefs.get();
+    const leafColumns = grid.columns.get();
+    const rows = buildHeaderRows(tree);
+
+    for (let r = 0; r < rows.length; r++) {
+      for (const cellDef of rows[r]) {
+        const { left, width } = spanExtent(cellDef, columnLayout, leafColumns);
+        if (width === 0) continue; // all spanned columns are hidden
+        const cell = el(
+          'div',
+          cellDef.isLeaf ? CLS.headerCell : `${CLS.headerCell} ${CLS.headerGroup}`,
+        );
+        cell.textContent = cellDef.column.header;
+        const top = r * headerRowHeight;
+        const height = cellDef.rowSpan * headerRowHeight;
+        cell.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${width}px;height:${height}px;box-sizing:border-box;overflow:hidden;`;
+        header.appendChild(cell);
+      }
     }
+  }
+
+  function spanExtent(
+    cell: HeaderCell,
+    layout: ColumnLayout,
+    leafColumns: ColumnDef[],
+  ): { left: number; width: number } {
+    const left = layout.offsets[cell.colStart] ?? 0;
+    let width = 0;
+    for (let i = cell.colStart; i < cell.colStart + cell.colSpan; i++) {
+      const leaf = leafColumns[i];
+      if (leaf && leaf.visible === false) continue;
+      width += layout.widths[i] ?? 0;
+    }
+    return { left, width };
   }
 
   // ─── Cell Rendering ───────────────────────────────────
@@ -298,7 +330,22 @@ export function createRenderer(options: RendererOptions): RendererInstance {
   unsubs.push(
     grid.subscribe('columns:update', () => {
       columnLayout = computeColumnLayout(grid.columns.get(), config.defaultColumnWidth);
+      headerDepth = Math.max(1, getHeaderDepth(grid.columnDefs.get()));
+      totalHeaderHeight = headerRowHeight * headerDepth;
       renderHeader();
+      updateSizing();
+      clearAllRows();
+      prevRange = null;
+      scheduleRender();
+    }),
+  );
+
+  // Width-only updates skip the header/depth rebuild since the leaf list and
+  // header structure are unchanged.
+  unsubs.push(
+    grid.subscribe('column:resize', () => {
+      columnLayout = computeColumnLayout(grid.columns.get(), config.defaultColumnWidth);
+      updateSizing();
       clearAllRows();
       prevRange = null;
       scheduleRender();
@@ -332,6 +379,8 @@ export function createRenderer(options: RendererOptions): RendererInstance {
   return {
     refresh() {
       columnLayout = computeColumnLayout(grid.columns.get(), config.defaultColumnWidth);
+      headerDepth = Math.max(1, getHeaderDepth(grid.columnDefs.get()));
+      totalHeaderHeight = headerRowHeight * headerDepth;
       renderHeader();
       updateSizing();
       clearAllRows();

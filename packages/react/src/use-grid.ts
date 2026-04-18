@@ -1,13 +1,20 @@
 import { createGrid, type GridInstance, type ColumnDef } from '@gridsmith/core';
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 
 import type { GridColumnDef, GridProps } from './types';
 
 export type UseGridOptions = Pick<GridProps, 'data' | 'columns' | 'plugins'>;
 
 function stripReactFields(columns: GridColumnDef[]): ColumnDef[] {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  return columns.map(({ cellRenderer, ...col }) => col);
+  return columns.map((col): ColumnDef => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { cellRenderer, cellEditor, children, ...rest } = col;
+    const stripped: ColumnDef = { ...rest };
+    if (children && children.length > 0) {
+      stripped.children = stripReactFields(children);
+    }
+    return stripped;
+  });
 }
 
 /**
@@ -41,15 +48,25 @@ export function useGrid(options: UseGridOptions): GridInstance {
     grid.setData(options.data);
   }, [options.data, grid]);
 
-  // Sync columns when content changes (JSON comparison avoids spurious updates)
-  const coreColumns = stripReactFields(options.columns);
-  const columnsKey = JSON.stringify(coreColumns);
+  // Sync columns when content changes (JSON comparison avoids spurious updates).
+  // Memoize the stripped tree by reference so stable `columns` props skip the
+  // recursive strip-and-stringify entirely. The replacer serializes functions
+  // (e.g. `comparator`) by source so swapping a comparator actually bumps the
+  // key instead of silently comparing equal after `JSON.stringify` drops it.
+  const coreColumns = useMemo(() => stripReactFields(options.columns), [options.columns]);
+  const columnsKey = useMemo(
+    () =>
+      JSON.stringify(coreColumns, (_key, value) =>
+        typeof value === 'function' ? String(value) : value,
+      ),
+    [coreColumns],
+  );
   const prevColumnsKeyRef = useRef(columnsKey);
   useEffect(() => {
     if (columnsKey === prevColumnsKeyRef.current) return;
     prevColumnsKeyRef.current = columnsKey;
     grid.setColumns(coreColumns);
-  }, [columnsKey, grid]);
+  }, [columnsKey, coreColumns, grid]);
 
   return grid;
 }
