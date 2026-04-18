@@ -6,12 +6,14 @@ import {
   type GridInstance,
   type HeaderCell,
   type Row,
+  type SelectionPluginApi,
   type VisibleRange,
   buildHeaderRows,
   calculateVisibleRange,
   columnStructureKey,
   computeColumnLayout,
   createEditingPlugin,
+  createSelectionPlugin,
   flattenColumns,
   getHeaderDepth,
   getTotalHeight,
@@ -33,6 +35,7 @@ import { FilterPopover } from './filter-popover';
 import { cycleSortState } from './header-sort';
 import type { GridProps } from './types';
 import { useGrid } from './use-grid';
+import { useGridSelection } from './use-grid-selection';
 import { useSignalValue } from './use-signal';
 
 // ─── Helpers ───────────────────────────────────────────────
@@ -113,7 +116,9 @@ export const Grid = memo(function Grid({
   // constructing throwaway plugin instances on every render.
   const [allPlugins] = useState(() => {
     const editingPlugin = createEditingPlugin();
-    return plugins ? [editingPlugin, ...plugins] : [editingPlugin];
+    const selectionPlugin = createSelectionPlugin();
+    const builtins = [editingPlugin, selectionPlugin];
+    return plugins ? [...builtins, ...plugins] : builtins;
   });
 
   const grid = useGrid({ data, columns, plugins: allPlugins });
@@ -184,12 +189,13 @@ export const Grid = memo(function Grid({
     return api;
   }, [grid]);
 
+  const selectionApi = useMemo(() => {
+    const api = grid.getPlugin<SelectionPluginApi>('selection');
+    if (!api) throw new Error('Selection plugin not found — this should not happen');
+    return api;
+  }, [grid]);
+
   const [editState, setEditState] = useState<EditState | null>(null);
-  const [focusedCell, setFocusedCell] = useState<{
-    row: number;
-    col: string;
-    colIndex: number;
-  } | null>(null);
 
   useEffect(() => {
     const unsubs = [
@@ -200,21 +206,28 @@ export const Grid = memo(function Grid({
     return () => unsubs.forEach((u) => u());
   }, [grid]);
 
-  // Clear focused cell when sort/filter/data/columns change, since view
-  // indices may no longer refer to the same underlying row.
-  useEffect(() => {
-    const unsubs = [
-      grid.subscribe('sort:change', () => setFocusedCell(null)),
-      grid.subscribe('filter:change', () => setFocusedCell(null)),
-      grid.subscribe('data:rowsUpdate', () => setFocusedCell(null)),
-      grid.subscribe('columns:update', () => setFocusedCell(null)),
-    ];
-    return () => unsubs.forEach((u) => u());
-  }, [grid]);
+  // ─── Selection state ───────────────────────────────────
+
+  const selection = useGridSelection(grid);
 
   // ─── Reactive state from core ──────────────────────────
 
   const currentColumns = useSignalValue(grid.columns);
+
+  // The active cell drives keyboard navigation and editor entry. Compute the
+  // visible-column index lazily from the active cell's id; if the column is
+  // gone (e.g. removed) we treat focus as cleared.
+  const focusedCell = useMemo<{
+    row: number;
+    col: string;
+    colIndex: number;
+  } | null>(() => {
+    const active = selection.activeCell;
+    if (!active) return null;
+    const colIndex = currentColumns.findIndex((c) => c.id === active.col);
+    if (colIndex === -1) return null;
+    return { row: active.row, col: active.col, colIndex };
+  }, [selection.activeCell, currentColumns]);
   const currentColumnDefs = useSignalValue(grid.columnDefs);
   const currentSort = useSignalValue(grid.sortState);
   const currentFilter = useSignalValue(grid.filterState);
@@ -259,6 +272,7 @@ export const Grid = memo(function Grid({
 
   const viewportRef = useRef<HTMLDivElement>(null);
   const headerInnerRef = useRef<HTMLDivElement>(null);
+  const gridRootRef = useRef<HTMLDivElement>(null);
   const [visibleRange, setVisibleRange] = useState<VisibleRange | null>(null);
 
   // Refs for latest values so the scroll handler never goes stale
@@ -349,6 +363,30 @@ export const Grid = memo(function Grid({
       grid.sortState.set(next);
     },
     [currentColumns, grid],
+  );
+
+  /**
+   * Handle a header click for selection. Independent of sort cycling so a
+   * non-sortable column can still be selected and a Ctrl/Cmd+click on a
+   * sortable column adds to the selection without re-sorting.
+   *
+   * Returns whether the event consumed the click — when `true`, the caller
+   * should skip its own sort handler.
+   */
+  const handleHeaderSelectClick = useCallback(
+    (columnId: string, modifiers: { shift: boolean; mod: boolean }): void => {
+      const { shift, mod } = modifiers;
+      if (mod && shift) {
+        selectionApi.selectColumn(columnId, 'extend');
+        return;
+      }
+      if (mod) {
+        selectionApi.selectColumn(columnId, 'add');
+        return;
+      }
+      selectionApi.selectColumn(columnId, 'replace');
+    },
+    [selectionApi],
   );
 
   const handleFilterApply = useCallback(
@@ -555,10 +593,12 @@ export const Grid = memo(function Grid({
           <button
             type="button"
             className="gs-header-label"
-            disabled={!sortable}
             onClick={(e) => {
-              if (!sortable) return;
-              handleHeaderSortClick(col.id, e.shiftKey);
+              const mod = e.ctrlKey || e.metaKey;
+              // Run sort before selection so the sort:change event (which
+              // clears prior selection) doesn't wipe out the new column pick.
+              if (!mod && sortable) handleHeaderSortClick(col.id, e.shiftKey);
+              handleHeaderSelectClick(col.id, { shift: e.shiftKey, mod });
             }}
             style={{
               flex: 1,
@@ -567,7 +607,7 @@ export const Grid = memo(function Grid({
               border: 'none',
               padding: '0 6px',
               height: '100%',
-              cursor: sortable ? 'pointer' : 'default',
+              cursor: 'pointer',
               font: 'inherit',
               color: 'inherit',
             }}
@@ -634,6 +674,7 @@ export const Grid = memo(function Grid({
       filterByCol,
       currentSort.length,
       handleHeaderSortClick,
+      handleHeaderSelectClick,
       openFilterCol,
       dragOverIndex,
       hasGroups,
@@ -782,13 +823,6 @@ export const Grid = memo(function Grid({
           if (dec.attributes) Object.assign(attrs, dec.attributes);
         }
 
-        // Keyboard focus indicator — purely visual, consumers can restyle via
-        // `.gs-cell--focused`. Not a core decoration because focus is an
-        // adapter-level concern tied to the Grid component's React state.
-        if (focusedCell && focusedCell.row === r && focusedCell.col === col.id) {
-          cellClassName += ' gs-cell--focused';
-        }
-
         cells.push(
           <div
             key={col.id}
@@ -830,7 +864,7 @@ export const Grid = memo(function Grid({
     columnIds,
     rowHeight,
     dataVersion,
-    focusedCell,
+    selection,
   ]);
 
   // ─── Cell interaction handlers ──────────────────────────
@@ -864,34 +898,119 @@ export const Grid = memo(function Grid({
       } else {
         editingApi.beginEdit(cell.row, cell.col);
       }
-      setFocusedCell(cell);
+      selectionApi.selectCell({ row: cell.row, col: cell.col });
     },
-    [parseCellFromTarget, currentColumns, editingApi, grid],
+    [parseCellFromTarget, currentColumns, editingApi, selectionApi, grid],
   );
+
+  // Drag selection: `dragSelectRef` is set on mousedown and cleared on the
+  // matching mouseup/leave. `dragJustEnded` carries the "did the user actually
+  // drag" signal across to the trailing click event so that the click handler
+  // (which would otherwise re-select the single cell under the cursor) skips
+  // its work and preserves the dragged range.
+  const dragSelectRef = useRef<{ row: number; col: string; moved: boolean } | null>(null);
+  const dragJustEnded = useRef(false);
+
+  const updateSelectionForClick = useCallback(
+    (coord: { row: number; col: string }, e: React.MouseEvent) => {
+      const mod = e.ctrlKey || e.metaKey;
+      if (e.shiftKey) {
+        selectionApi.extendTo(coord);
+      } else if (mod) {
+        selectionApi.addCell(coord);
+      } else {
+        selectionApi.selectCell(coord);
+      }
+    },
+    [selectionApi],
+  );
+
+  const handleCellMouseDown = useCallback(
+    (e: React.MouseEvent) => {
+      if (e.button !== 0) return;
+      const cell = parseCellFromTarget(e.target);
+      if (!cell) return;
+
+      // Suppress text-selection that the browser would otherwise start while
+      // the user drags across cells.
+      e.preventDefault();
+      // Move keyboard focus into the grid so subsequent keystrokes (Shift+Arrow,
+      // Ctrl+A, etc.) reach `handleKeyDown` without requiring a Tab.
+      gridRootRef.current?.focus({ preventScroll: true });
+      // A new gesture starts here — discard any stale "drag just ended" flag
+      // that didn't get consumed by a trailing click on a cell.
+      dragJustEnded.current = false;
+
+      // If pressing on a different cell while editing, commit before moving.
+      if (editState && (editState.rowIndex !== cell.row || editState.columnId !== cell.col)) {
+        editingApi.commitEdit();
+      }
+
+      const coord = { row: cell.row, col: cell.col };
+      updateSelectionForClick(coord, e);
+      dragSelectRef.current = { row: cell.row, col: cell.col, moved: false };
+    },
+    [parseCellFromTarget, editState, editingApi, updateSelectionForClick],
+  );
+
+  const handleCellMouseMove = useCallback(
+    (e: React.MouseEvent) => {
+      if (!dragSelectRef.current) return;
+      if ((e.buttons & 1) === 0) {
+        dragSelectRef.current = null;
+        return;
+      }
+      const cell = parseCellFromTarget(e.target);
+      if (!cell) return;
+      if (cell.row === dragSelectRef.current.row && cell.col === dragSelectRef.current.col) {
+        return;
+      }
+      selectionApi.extendTo({ row: cell.row, col: cell.col });
+      dragSelectRef.current.moved = true;
+    },
+    [parseCellFromTarget, selectionApi],
+  );
+
+  const handleCellMouseUp = useCallback(() => {
+    if (dragSelectRef.current?.moved) {
+      dragJustEnded.current = true;
+    }
+    dragSelectRef.current = null;
+  }, []);
 
   const handleCellClick = useCallback(
     (e: React.MouseEvent) => {
       const cell = parseCellFromTarget(e.target);
       if (!cell) return;
 
-      // If clicking a different cell while editing, commit current edit
-      if (editState && (editState.rowIndex !== cell.row || editState.columnId !== cell.col)) {
-        editingApi.commitEdit();
+      // If the user just finished dragging a range, the click event is the
+      // tail end of that drag — keep the dragged range intact and only handle
+      // editing-related side effects below.
+      const draggedHere = dragJustEnded.current;
+      dragJustEnded.current = false;
+
+      if (!draggedHere) {
+        // Mirror of the mousedown selection logic so environments that only
+        // dispatch click events (jsdom, screen readers) still update the
+        // selection. Idempotent when mousedown already ran.
+        if (editState && (editState.rowIndex !== cell.row || editState.columnId !== cell.col)) {
+          editingApi.commitEdit();
+        }
+        updateSelectionForClick({ row: cell.row, col: cell.col }, e);
       }
 
-      setFocusedCell(cell);
-
-      // Checkbox: toggle on single click
+      // Checkbox: toggle on single click. Don't toggle when a modifier was
+      // used to compose selection — that gesture is selection, not edit.
       const colDef = currentColumns[cell.colIndex];
       if (colDef && colDef.editable !== false) {
         const editorType = colDef.editor ?? colDef.type ?? 'text';
-        if (editorType === 'checkbox') {
+        if (editorType === 'checkbox' && !e.shiftKey && !e.ctrlKey && !e.metaKey) {
           const current = grid.getCell(cell.row, cell.col);
           grid.setCell(cell.row, cell.col, !current);
         }
       }
     },
-    [parseCellFromTarget, editState, editingApi, currentColumns, grid],
+    [parseCellFromTarget, editState, editingApi, currentColumns, grid, updateSelectionForClick],
   );
 
   // ─── Navigation helpers ────────────────────────────────
@@ -929,7 +1048,7 @@ export const Grid = memo(function Grid({
   );
 
   const moveFocusTo = useCallback(
-    (row: number, colIndex: number) => {
+    (row: number, colIndex: number, extend = false) => {
       if (totalRows === 0 || visibleColIndices.length === 0) return;
       const clampedRow = Math.max(0, Math.min(totalRows - 1, row));
       // colIndex must be one of the visible indices — callers compute from
@@ -938,10 +1057,14 @@ export const Grid = memo(function Grid({
         visibleColIndices.indexOf(colIndex) === -1 ? (visibleColIndices[0] ?? 0) : colIndex;
       const col = currentColumns[clampedCol];
       if (!col) return;
-      setFocusedCell({ row: clampedRow, col: col.id, colIndex: clampedCol });
+      if (extend) {
+        selectionApi.extendTo({ row: clampedRow, col: col.id });
+      } else {
+        selectionApi.selectCell({ row: clampedRow, col: col.id });
+      }
       scrollFocusIntoView(clampedRow, clampedCol);
     },
-    [totalRows, visibleColIndices, currentColumns, scrollFocusIntoView],
+    [totalRows, visibleColIndices, currentColumns, selectionApi, scrollFocusIntoView],
   );
 
   /**
@@ -985,60 +1108,107 @@ export const Grid = memo(function Grid({
       // If currently editing, the editor handles its own keys
       if (editState) return;
 
+      const mod = e.ctrlKey || e.metaKey;
+
+      // If a sibling input has focus (e.g. a filter-popover textbox), let it
+      // own its own keystrokes — otherwise Ctrl/Cmd+A would steal the native
+      // "select text in input" behavior.
+      const target = e.target as HTMLElement | null;
+      const fromTextInput =
+        !!target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable);
+
+      // Ctrl/Cmd+A — select all, regardless of current focus.
+      if (mod && (e.key === 'a' || e.key === 'A')) {
+        if (fromTextInput) return;
+        e.preventDefault();
+        selectionApi.selectAll();
+        return;
+      }
+
+      // Escape clears the selection (Excel parity). Only when not editing —
+      // the editor's Escape handler runs first via the early-return above.
+      if (e.key === 'Escape') {
+        if (selectionApi.getState().ranges.length === 0) return;
+        e.preventDefault();
+        selectionApi.clear();
+        return;
+      }
+
       if (!focusedCell) return;
+
+      // Excel parity: Ctrl+Space selects the active column, Shift+Space selects
+      // the active row. Adding modifier keys composes (replace by default).
+      if (e.key === ' ' || e.key === 'Spacebar') {
+        if (mod && !e.shiftKey) {
+          e.preventDefault();
+          selectionApi.selectColumn(focusedCell.col, 'replace');
+          return;
+        }
+        if (e.shiftKey && !mod) {
+          e.preventDefault();
+          selectionApi.selectRow(focusedCell.row, 'replace');
+          return;
+        }
+      }
 
       const { row, colIndex } = focusedCell;
       const lastRow = totalRows - 1;
-      const mod = e.ctrlKey || e.metaKey;
+      // Tab never extends selection — it always moves the active cell. Other
+      // navigation keys honor Shift to grow the active range.
+      const extend = e.shiftKey && e.key !== 'Tab';
 
       // ─── Pure navigation keys ────────────────────────
       if (NAV_KEYS.has(e.key)) {
         e.preventDefault();
         switch (e.key) {
           case 'ArrowUp': {
-            moveFocusTo(mod ? 0 : row - 1, colIndex);
+            moveFocusTo(mod ? 0 : row - 1, colIndex, extend);
             return;
           }
           case 'ArrowDown': {
-            moveFocusTo(mod ? lastRow : row + 1, colIndex);
+            moveFocusTo(mod ? lastRow : row + 1, colIndex, extend);
             return;
           }
           case 'ArrowLeft': {
             if (mod) {
-              moveFocusTo(row, firstVisibleColIndex);
+              moveFocusTo(row, firstVisibleColIndex, extend);
             } else {
               const next = stepVisibleCol(colIndex, -1);
-              if (next !== null) moveFocusTo(row, next);
+              if (next !== null) moveFocusTo(row, next, extend);
             }
             return;
           }
           case 'ArrowRight': {
             if (mod) {
-              moveFocusTo(row, lastVisibleColIndex);
+              moveFocusTo(row, lastVisibleColIndex, extend);
             } else {
               const next = stepVisibleCol(colIndex, 1);
-              if (next !== null) moveFocusTo(row, next);
+              if (next !== null) moveFocusTo(row, next, extend);
             }
             return;
           }
           case 'Home': {
-            moveFocusTo(mod ? 0 : row, firstVisibleColIndex);
+            moveFocusTo(mod ? 0 : row, firstVisibleColIndex, extend);
             return;
           }
           case 'End': {
-            moveFocusTo(mod ? lastRow : row, lastVisibleColIndex);
+            moveFocusTo(mod ? lastRow : row, lastVisibleColIndex, extend);
             return;
           }
           case 'PageDown': {
             const el = viewportRef.current;
             const pageSize = el ? Math.max(1, Math.floor(el.clientHeight / rowHeight)) : 1;
-            moveFocusTo(row + pageSize, colIndex);
+            moveFocusTo(row + pageSize, colIndex, extend);
             return;
           }
           case 'PageUp': {
             const el = viewportRef.current;
             const pageSize = el ? Math.max(1, Math.floor(el.clientHeight / rowHeight)) : 1;
-            moveFocusTo(row - pageSize, colIndex);
+            moveFocusTo(row - pageSize, colIndex, extend);
             return;
           }
           case 'Tab': {
@@ -1117,6 +1287,7 @@ export const Grid = memo(function Grid({
       totalRows,
       currentColumns,
       editingApi,
+      selectionApi,
       grid,
       moveFocusTo,
       stepVisibleCol,
@@ -1278,6 +1449,7 @@ export const Grid = memo(function Grid({
       }}
       tabIndex={0}
       onKeyDown={handleKeyDown}
+      ref={gridRootRef}
     >
       <div
         className="gs-header"
@@ -1311,6 +1483,10 @@ export const Grid = memo(function Grid({
           overflow: 'auto',
           flex: 1,
         }}
+        onMouseDown={handleCellMouseDown}
+        onMouseMove={handleCellMouseMove}
+        onMouseUp={handleCellMouseUp}
+        onMouseLeave={handleCellMouseUp}
         onClick={handleCellClick}
         onDoubleClick={handleDoubleClick}
       >

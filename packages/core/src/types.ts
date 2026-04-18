@@ -151,6 +151,7 @@ export interface GridEvents {
     newValue: CellValue;
   };
   'edit:cancel': { rowIndex: number; columnId: string };
+  'selection:change': SelectionState;
   'plugin:ready': { name: string };
   ready: undefined;
   destroy: undefined;
@@ -169,6 +170,67 @@ export interface EditorDefinition {
   name: string;
   parse?: (raw: string) => CellValue;
   format?: (value: CellValue) => string;
+}
+
+// ─── Selection ────────────────────────────────────────────
+
+/** A single cell coordinate. `row` is a view index; `col` is the column id. */
+export interface CellCoord {
+  row: number;
+  col: string;
+}
+
+/**
+ * A rectangular range of cells, normalized so `startRow ≤ endRow`. `startCol`
+ * and `endCol` refer to column ids; the visual span covers every leaf column
+ * between them in the current order (inclusive on both ends).
+ *
+ * `startCol` is positioned left of `endCol` in the column order *at the time
+ * the range was created*. Because columns can be reordered at runtime, the
+ * pair is not guaranteed to remain in left-to-right order forever — consumers
+ * that need a deterministic visual span (e.g. clipboard, fill-handle) should
+ * resolve both ids to current indices and treat them as an unordered pair.
+ */
+export interface CellRange {
+  startRow: number;
+  endRow: number;
+  startCol: string;
+  endCol: string;
+}
+
+export interface SelectionState {
+  readonly ranges: readonly CellRange[];
+  /** Active cell — the most recently focused corner of the latest range. */
+  readonly activeCell: Readonly<CellCoord> | null;
+}
+
+/**
+ * How a header click or keyboard gesture should compose with the existing
+ * selection. `replace` clears it, `add` adds a new range, `extend` reshapes
+ * the most recent range from its anchor to the new corner.
+ */
+export type SelectionMode = 'replace' | 'add' | 'extend';
+
+export interface SelectionPluginApi {
+  getState(): SelectionState;
+  /** Replace the entire selection with a single 1×1 range at `coord`. */
+  selectCell(coord: CellCoord): void;
+  /** Add a new 1×1 range and make it active (Ctrl/Cmd+click). */
+  addCell(coord: CellCoord): void;
+  /** Reshape the active range from its anchor to `coord` (Shift+click / drag). */
+  extendTo(coord: CellCoord): void;
+  /** Select an entire row by view index. */
+  selectRow(rowIndex: number, mode?: SelectionMode): void;
+  /** Select an entire column by id. */
+  selectColumn(columnId: string, mode?: SelectionMode): void;
+  /** Select all cells. */
+  selectAll(): void;
+  /** Clear all ranges and the active cell. */
+  clear(): void;
+  /** True if `(rowIndex, columnId)` falls within any range. */
+  isCellSelected(rowIndex: number, columnId: string): boolean;
+  /** True if `(rowIndex, columnId)` is the active cell. */
+  isCellActive(rowIndex: number, columnId: string): boolean;
 }
 
 export interface EditingPluginApi {
