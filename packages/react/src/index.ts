@@ -7,6 +7,7 @@ export type { UseGridOptions } from './use-grid';
 export { useSignalValue } from './use-signal';
 export { useGridSelection } from './use-grid-selection';
 export type { SelectionState } from './use-grid-selection';
+export { useGridClipboard } from './use-grid-clipboard';
 
 // Types
 export type { GridProps, GridColumnDef, CellRendererProps, CellEditorProps } from './types';
@@ -35,6 +36,10 @@ export {
   type GridPlugin,
   type GridOptions,
   type HeaderCell,
+  type ClipboardPluginApi,
+  type ClipboardPayload,
+  type ClipboardMatrix,
+  createClipboardPlugin,
   createEditingPlugin,
   flattenColumns,
   getHeaderDepth,

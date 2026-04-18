@@ -28,6 +28,9 @@ export { createEditingPlugin } from './editing';
 // Selection
 export { createSelectionPlugin } from './selection';
 
+// Clipboard
+export { createClipboardPlugin } from './clipboard';
+
 // Column grouping
 export {
   flattenColumns,
@@ -67,6 +70,9 @@ export type {
   SelectionState,
   SelectionMode,
   SelectionPluginApi,
+  ClipboardPayload,
+  ClipboardMatrix,
+  ClipboardPluginApi,
   CellDecoration,
   CellDecorator,
   PluginContext,
