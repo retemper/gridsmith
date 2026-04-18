@@ -34,6 +34,9 @@ export { createClipboardPlugin } from './clipboard';
 // History
 export { createHistoryPlugin } from './history';
 
+// Fill Handle
+export { createFillHandlePlugin } from './fill-handle';
+
 // Column grouping
 export {
   flattenColumns,
@@ -79,6 +82,12 @@ export type {
   Command,
   HistoryPluginApi,
   HistoryPluginOptions,
+  FillPatternKind,
+  FillDirection,
+  FillPattern,
+  FillOperation,
+  FillHandlePluginOptions,
+  FillHandlePluginApi,
   CellDecoration,
   CellDecorator,
   PluginContext,

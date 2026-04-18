@@ -1,8 +1,10 @@
 import {
+  type CellRange,
   type CellValue,
   type ClipboardPluginApi,
   type EditingPluginApi,
   type EditState,
+  type FillHandlePluginApi,
   type FilterEntry,
   type GridInstance,
   type HeaderCell,
@@ -16,6 +18,7 @@ import {
   computeColumnLayout,
   createClipboardPlugin,
   createEditingPlugin,
+  createFillHandlePlugin,
   createHistoryPlugin,
   createSelectionPlugin,
   flattenColumns,
@@ -123,7 +126,14 @@ export const Grid = memo(function Grid({
     const selectionPlugin = createSelectionPlugin();
     const clipboardPlugin = createClipboardPlugin();
     const historyPlugin = createHistoryPlugin();
-    const builtins = [editingPlugin, selectionPlugin, clipboardPlugin, historyPlugin];
+    const fillHandlePlugin = createFillHandlePlugin();
+    const builtins = [
+      editingPlugin,
+      selectionPlugin,
+      clipboardPlugin,
+      historyPlugin,
+      fillHandlePlugin,
+    ];
     return plugins ? [...builtins, ...plugins] : builtins;
   });
 
@@ -210,6 +220,12 @@ export const Grid = memo(function Grid({
   const historyApi = useMemo(() => {
     const api = grid.getPlugin<HistoryPluginApi>('history');
     if (!api) throw new Error('History plugin not found — this should not happen');
+    return api;
+  }, [grid]);
+
+  const fillHandleApi = useMemo(() => {
+    const api = grid.getPlugin<FillHandlePluginApi>('fill-handle');
+    if (!api) throw new Error('Fill handle plugin not found — this should not happen');
     return api;
   }, [grid]);
 
@@ -996,6 +1012,205 @@ export const Grid = memo(function Grid({
     dragSelectRef.current = null;
   }, []);
 
+  // ─── Fill handle ───────────────────────────────────────
+  //
+  // Rect of the range that owns the fill handle — the last range in the
+  // selection (matches the clipboard plugin's "active range" rule). Returned
+  // as canvas-relative coords so it composes with the overlay below.
+  const activeRange = useMemo<CellRange | null>(() => {
+    const ranges = selection.ranges;
+    if (ranges.length === 0) return null;
+    return ranges[ranges.length - 1];
+  }, [selection.ranges]);
+
+  const rectForRange = useCallback(
+    (range: CellRange): { left: number; top: number; width: number; height: number } | null => {
+      const startIdx = currentColumns.findIndex((c) => c.id === range.startCol);
+      const endIdx = currentColumns.findIndex((c) => c.id === range.endCol);
+      if (startIdx === -1 || endIdx === -1) return null;
+      const c0 = Math.min(startIdx, endIdx);
+      const c1 = Math.max(startIdx, endIdx);
+      const r0 = Math.min(range.startRow, range.endRow);
+      const r1 = Math.max(range.startRow, range.endRow);
+      const left = columnLayout.offsets[c0] ?? 0;
+      const rightCol = c1;
+      const right = (columnLayout.offsets[rightCol] ?? 0) + (columnLayout.widths[rightCol] ?? 0);
+      const top = r0 * rowHeight;
+      const bottom = (r1 + 1) * rowHeight;
+      return { left, top, width: right - left, height: bottom - top };
+    },
+    [currentColumns, columnLayout, rowHeight],
+  );
+
+  const activeRangeRect = useMemo(
+    () => (activeRange ? rectForRange(activeRange) : null),
+    [activeRange, rectForRange],
+  );
+
+  const [fillPreviewRange, setFillPreviewRange] = useState<CellRange | null>(null);
+  const fillPreviewRect = useMemo(
+    () => (fillPreviewRange ? rectForRange(fillPreviewRange) : null),
+    [fillPreviewRange, rectForRange],
+  );
+
+  /**
+   * Drag state set on pointerdown at the fill handle. `sourceRange` is
+   * captured up-front so later selection mutations (e.g. stray clicks) don't
+   * change the seed mid-drag.
+   */
+  const fillDragRef = useRef<{
+    pointerId: number;
+    sourceRange: CellRange;
+    targetRange: CellRange;
+  } | null>(null);
+
+  /**
+   * Given a pointer, find the cell under it. Returns `null` when the pointer
+   * is outside any rendered cell (headers, empty viewport space). Uses
+   * `elementFromPoint` + a data-attribute read rather than tracking the last
+   * hovered cell — simpler, and correct even when the pointer re-enters from
+   * an unexpected edge.
+   */
+  const lookupCellAt = useCallback(
+    (clientX: number, clientY: number): { row: number; col: string } | null => {
+      const el = document.elementFromPoint(clientX, clientY);
+      if (!el) return null;
+      const cellEl = (el as HTMLElement).closest?.('.gs-cell') as HTMLElement | null;
+      if (!cellEl) return null;
+      const row = Number(cellEl.dataset.row);
+      const col = cellEl.dataset.col;
+      if (col == null || Number.isNaN(row)) return null;
+      return { row, col };
+    },
+    [],
+  );
+
+  /**
+   * Given the source range and a target cell, expand the source to a target
+   * rectangle constrained to a single axis. The axis is chosen by whichever
+   * direction the pointer moved further from the source's nearest edge.
+   */
+  const computeFillTarget = useCallback(
+    (source: CellRange, cell: { row: number; col: string }): CellRange => {
+      const startIdx = currentColumns.findIndex((c) => c.id === source.startCol);
+      const endIdx = currentColumns.findIndex((c) => c.id === source.endCol);
+      const targetIdx = currentColumns.findIndex((c) => c.id === cell.col);
+      if (startIdx === -1 || endIdx === -1 || targetIdx === -1) return source;
+
+      const srcC0 = Math.min(startIdx, endIdx);
+      const srcC1 = Math.max(startIdx, endIdx);
+      const srcR0 = Math.min(source.startRow, source.endRow);
+      const srcR1 = Math.max(source.startRow, source.endRow);
+
+      // Row-distance from the nearest edge of the source block.
+      const rowOverflow =
+        cell.row < srcR0 ? srcR0 - cell.row : cell.row > srcR1 ? cell.row - srcR1 : 0;
+      const colOverflow =
+        targetIdx < srcC0 ? srcC0 - targetIdx : targetIdx > srcC1 ? targetIdx - srcC1 : 0;
+
+      // Pick the dominant axis. Ties fall through to rows (matches Excel's
+      // slight preference for vertical fills when the pointer sits on a
+      // corner cell).
+      if (rowOverflow === 0 && colOverflow === 0) return source;
+      if (rowOverflow >= colOverflow) {
+        const r0 = Math.min(cell.row, srcR0);
+        const r1 = Math.max(cell.row, srcR1);
+        return {
+          startRow: r0,
+          endRow: r1,
+          startCol: source.startCol,
+          endCol: source.endCol,
+        };
+      }
+      const newC0 = Math.min(targetIdx, srcC0);
+      const newC1 = Math.max(targetIdx, srcC1);
+      return {
+        startRow: source.startRow,
+        endRow: source.endRow,
+        startCol: currentColumns[newC0].id,
+        endCol: currentColumns[newC1].id,
+      };
+    },
+    [currentColumns],
+  );
+
+  const handleFillHandlePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      // Ignore non-primary buttons (right-click, middle-click). jsdom
+      // synthetic events can leave `button` unset — treat that as primary.
+      const button = (e as unknown as { button?: number }).button ?? 0;
+      if (button !== 0) return;
+      if (!activeRange) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // `setPointerCapture` throws in jsdom test environments that lack
+      // layout tracking — swallow the error so the drag still proceeds.
+      try {
+        (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      } catch {
+        /* noop */
+      }
+      fillDragRef.current = {
+        pointerId: e.pointerId,
+        sourceRange: activeRange,
+        targetRange: activeRange,
+      };
+      setFillPreviewRange(activeRange);
+    },
+    [activeRange],
+  );
+
+  const handleFillHandlePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const drag = fillDragRef.current;
+      if (!drag) return;
+      const cell = lookupCellAt(e.clientX, e.clientY);
+      if (!cell) return;
+      const target = computeFillTarget(drag.sourceRange, cell);
+      drag.targetRange = target;
+      setFillPreviewRange(target);
+    },
+    [lookupCellAt, computeFillTarget],
+  );
+
+  const handleFillHandlePointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const drag = fillDragRef.current;
+      if (!drag) return;
+      try {
+        (e.currentTarget as HTMLElement).releasePointerCapture(drag.pointerId);
+      } catch {
+        // Capture may already be lost (e.g. element unmounted) — safe to ignore.
+      }
+      fillDragRef.current = null;
+      setFillPreviewRange(null);
+      // Only apply when the target actually extended the source — a click
+      // without drag produces an identical rectangle and shouldn't mutate.
+      const same =
+        drag.targetRange.startRow === drag.sourceRange.startRow &&
+        drag.targetRange.endRow === drag.sourceRange.endRow &&
+        drag.targetRange.startCol === drag.sourceRange.startCol &&
+        drag.targetRange.endCol === drag.sourceRange.endCol;
+      if (same) return;
+      fillHandleApi.fill({ source: drag.sourceRange, target: drag.targetRange });
+      // Expand the selection to include the newly filled region so the user
+      // can continue acting on the extended block.
+      selectionApi.selectCell({
+        row: drag.targetRange.startRow,
+        col: drag.targetRange.startCol,
+      });
+      selectionApi.extendTo({
+        row: drag.targetRange.endRow,
+        col: drag.targetRange.endCol,
+      });
+    },
+    [fillHandleApi, selectionApi],
+  );
+
+  // Hide the handle while editing or when the active range references a
+  // column that has since been removed.
+  const fillHandleVisible = !editState && activeRangeRect !== null;
+
   const handleCellClick = useCallback(
     (e: React.MouseEvent) => {
       const cell = parseCellFromTarget(e.target);
@@ -1569,6 +1784,47 @@ export const Grid = memo(function Grid({
         >
           {rowElements}
           {editorOverlay}
+          {fillPreviewRect && (
+            <div
+              className="gs-fill-preview"
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: fillPreviewRect.left,
+                top: fillPreviewRect.top,
+                width: fillPreviewRect.width,
+                height: fillPreviewRect.height,
+                border: '1px dashed #1a73e8',
+                boxSizing: 'border-box',
+                pointerEvents: 'none',
+                zIndex: 4,
+              }}
+            />
+          )}
+          {fillHandleVisible && activeRangeRect && (
+            <div
+              className="gs-fill-handle"
+              role="presentation"
+              aria-hidden="true"
+              onPointerDown={handleFillHandlePointerDown}
+              onPointerMove={handleFillHandlePointerMove}
+              onPointerUp={handleFillHandlePointerUp}
+              onPointerCancel={handleFillHandlePointerUp}
+              style={{
+                position: 'absolute',
+                left: activeRangeRect.left + activeRangeRect.width - 4,
+                top: activeRangeRect.top + activeRangeRect.height - 4,
+                width: 8,
+                height: 8,
+                background: '#1a73e8',
+                border: '1px solid white',
+                boxSizing: 'border-box',
+                cursor: 'crosshair',
+                zIndex: 5,
+                touchAction: 'none',
+              }}
+            />
+          )}
         </div>
       </div>
       {pinnedBottomRowsEl}

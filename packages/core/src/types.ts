@@ -296,6 +296,75 @@ export interface ClipboardPluginApi {
   applyMatrix(matrix: ClipboardMatrix, startRow: number, startCol: string): void;
 }
 
+// ─── Fill Handle ──────────────────────────────────────────
+
+/**
+ * Recognizable series a source block can follow. `copy` is the fallback when
+ * no other pattern fits — the seed values cycle unchanged.
+ */
+export type FillPatternKind =
+  | 'copy'
+  | 'arithmetic'
+  | 'date-day'
+  | 'day-name-short'
+  | 'day-name-long'
+  | 'month-name-short'
+  | 'month-name-long'
+  | 'custom-list'
+  | 'prefix-number';
+
+/** Direction of extrapolation relative to the seed block. */
+export type FillDirection = 'forward' | 'reverse';
+
+/** Detected pattern over a 1-D sequence of seed values. */
+export interface FillPattern {
+  kind: FillPatternKind;
+  /** The original seed values, unchanged. */
+  values: readonly CellValue[];
+}
+
+export interface FillOperation {
+  /** The block of seed cells. */
+  source: CellRange;
+  /**
+   * The rectangle after the drag. Must fully contain `source` and extend in
+   * exactly one axis (rows OR columns), never both.
+   */
+  target: CellRange;
+}
+
+export interface FillHandlePluginOptions {
+  /**
+   * Case-insensitive cyclic lists the pattern detector will recognize
+   * (e.g. `['Q1','Q2','Q3','Q4']`). Day/month name lists are built in and
+   * do not need to be registered here.
+   */
+  customLists?: readonly (readonly string[])[];
+}
+
+export interface FillHandlePluginApi {
+  /**
+   * Apply a fill. Returns `true` when cells were written; `false` for degenerate
+   * inputs (empty source, target not containing source, two-axis extension).
+   */
+  fill(op: FillOperation): boolean;
+  /** Detect the pattern over a 1-D seed sequence. */
+  inferPattern(values: readonly CellValue[]): FillPattern;
+  /**
+   * Extrapolate `count` values from a seed sequence. `forward` continues the
+   * pattern past the end; `reverse` extends backward past the start.
+   */
+  generateValues(
+    source: readonly CellValue[],
+    count: number,
+    direction: FillDirection,
+  ): CellValue[];
+  /** Add a custom cyclic list for the detector to recognize from now on. */
+  registerCustomList(list: readonly string[]): void;
+  /** Snapshot of every custom list currently registered (in registration order). */
+  getCustomLists(): string[][];
+}
+
 // ─── History ──────────────────────────────────────────────
 
 /**

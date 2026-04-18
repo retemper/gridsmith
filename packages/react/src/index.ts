@@ -8,6 +8,7 @@ export { useSignalValue } from './use-signal';
 export { useGridSelection } from './use-grid-selection';
 export type { SelectionState } from './use-grid-selection';
 export { useGridClipboard } from './use-grid-clipboard';
+export { useGridFillHandle } from './use-grid-fill-handle';
 
 // Types
 export type { GridProps, GridColumnDef, CellRendererProps, CellEditorProps } from './types';
@@ -42,8 +43,15 @@ export {
   type Command,
   type HistoryPluginApi,
   type HistoryPluginOptions,
+  type FillPatternKind,
+  type FillDirection,
+  type FillPattern,
+  type FillOperation,
+  type FillHandlePluginOptions,
+  type FillHandlePluginApi,
   createClipboardPlugin,
   createEditingPlugin,
+  createFillHandlePlugin,
   createHistoryPlugin,
   flattenColumns,
   getHeaderDepth,
