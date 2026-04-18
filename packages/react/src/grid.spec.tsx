@@ -568,4 +568,73 @@ describe('Grid', () => {
       expect(pinnedRows).toHaveLength(0);
     });
   });
+
+  describe('grouped headers', () => {
+    const groupedColumns: GridColumnDef[] = [
+      { id: 'name', header: 'Name' },
+      {
+        id: 'loc',
+        header: 'Location',
+        children: [
+          { id: 'city', header: 'City' },
+          { id: 'country', header: 'Country' },
+        ],
+      },
+    ];
+
+    const groupedData = [
+      { name: 'Alice', city: 'Seoul', country: 'KR' },
+      { name: 'Bob', city: 'Tokyo', country: 'JP' },
+    ];
+
+    it('renders a group header cell above the leaf cells', () => {
+      const { container } = render(<Grid data={groupedData} columns={groupedColumns} />);
+      const groupCell = container.querySelector('.gs-header-cell--group');
+      expect(groupCell).toBeTruthy();
+      expect(groupCell?.textContent).toBe('Location');
+    });
+
+    it('renders header cells for every leaf column', () => {
+      const { container } = render(<Grid data={groupedData} columns={groupedColumns} />);
+      // All header cells (leaf + group) use .gs-header-cell; leaves carry a
+      // data-col attribute, groups don't.
+      const leafHeaders = container.querySelectorAll('.gs-header-cell[data-col]');
+      expect(leafHeaders).toHaveLength(3);
+      const ids = Array.from(leafHeaders).map((h) => h.getAttribute('data-col'));
+      expect(ids).toEqual(['name', 'city', 'country']);
+    });
+
+    it('expands the header container height by group depth', () => {
+      const rowHeight = 30;
+      const { container } = render(
+        <Grid data={groupedData} columns={groupedColumns} rowHeight={rowHeight} />,
+      );
+      const header = container.querySelector('.gs-header') as HTMLElement;
+      expect(header.style.height).toBe(`${rowHeight * 2}px`);
+    });
+
+    it('renders data rows using leaf columns', () => {
+      const { container } = render(<Grid data={groupedData} columns={groupedColumns} />);
+      const cells = Array.from(container.querySelectorAll('.gs-cell')).map((c) => c.textContent);
+      expect(cells).toContain('Alice');
+      expect(cells).toContain('Seoul');
+      expect(cells).toContain('KR');
+    });
+
+    it('does not make leaf headers draggable when groups are present', () => {
+      const { container } = render(<Grid data={groupedData} columns={groupedColumns} />);
+      const nameHeader = container.querySelector('.gs-header-cell[data-col="name"]');
+      expect(nameHeader?.getAttribute('draggable')).toBe('false');
+    });
+
+    it('still keeps leaf headers draggable for flat column configs', () => {
+      const flat: GridColumnDef[] = [
+        { id: 'name', header: 'Name' },
+        { id: 'age', header: 'Age' },
+      ];
+      const { container } = render(<Grid data={data} columns={flat} />);
+      const first = container.querySelector('.gs-header-cell[data-col="name"]');
+      expect(first?.getAttribute('draggable')).toBe('true');
+    });
+  });
 });

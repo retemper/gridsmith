@@ -45,6 +45,12 @@ export interface ColumnDef {
   selectOptions?: SelectOption[];
   /** Custom comparator for sorting this column. Overrides the default. */
   comparator?: CellComparator;
+  /**
+   * Nested child columns. When set, this entry is treated as a header group:
+   * it renders a spanning header cell above its children and does not carry
+   * its own data. Data operations (sort/filter/edit) run on leaf columns only.
+   */
+  children?: ColumnDef[];
 }
 
 // ─── Sort & Filter ─────────────────────────────────────────
@@ -131,6 +137,7 @@ export interface GridEvents {
   'data:change': { changes: CellChange[] };
   'data:rowsUpdate': { data: Row[] };
   'columns:update': { columns: ColumnDef[] };
+  'columnDefs:update': { columnDefs: ColumnDef[] };
   'sort:change': { sort: SortState };
   'filter:change': { filter: FilterState };
   'viewport:change': { viewport: ViewportState };
@@ -221,7 +228,14 @@ export interface GridOptions {
 export interface GridInstance {
   // State access
   readonly data: Row[];
+  /** Flat array of leaf columns. Used for all data operations (sort, filter, edit). */
   readonly columns: ReadonlySignal<ColumnDef[]>;
+  /**
+   * Original column tree as provided by the caller (with `children` preserved).
+   * Used exclusively by header renderers. For flat column configs this is
+   * equivalent to `columns`.
+   */
+  readonly columnDefs: ReadonlySignal<ColumnDef[]>;
   readonly sortState: Signal<SortState>;
   readonly filterState: Signal<FilterState>;
   readonly indexMap: Computed<IndexMap>;
