@@ -26,7 +26,13 @@ export type { EventBus, EventHandler } from './events';
 export { createEditingPlugin } from './editing';
 
 // Column grouping
-export { flattenColumns, getHeaderDepth, buildHeaderRows, setLeafWidth } from './column-group';
+export {
+  flattenColumns,
+  getHeaderDepth,
+  buildHeaderRows,
+  setLeafWidth,
+  columnStructureKey,
+} from './column-group';
 export type { HeaderCell } from './column-group';
 
 // Types

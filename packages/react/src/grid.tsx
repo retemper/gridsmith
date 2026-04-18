@@ -9,6 +9,7 @@ import {
   type VisibleRange,
   buildHeaderRows,
   calculateVisibleRange,
+  columnStructureKey,
   computeColumnLayout,
   createEditingPlugin,
   flattenColumns,
@@ -237,13 +238,14 @@ export const Grid = memo(function Grid({
     [currentColumns, defaultColumnWidth],
   );
 
-  const headerDepth = useMemo(
-    () => Math.max(1, getHeaderDepth(currentColumnDefs)),
-    [currentColumnDefs],
-  );
+  // Header depth and row layout depend only on the tree's shape, not on leaf
+  // widths/visibility. Resizing a column mutates the tree reference but leaves
+  // the structure key unchanged, so we avoid rebuilding either memo.
+  const structureKey = useMemo(() => columnStructureKey(currentColumnDefs), [currentColumnDefs]);
+  const headerDepth = useMemo(() => Math.max(1, getHeaderDepth(currentColumnDefs)), [structureKey]);
   const totalHeaderHeight = headerHeight * headerDepth;
 
-  const headerRows = useMemo(() => buildHeaderRows(currentColumnDefs), [currentColumnDefs]);
+  const headerRows = useMemo(() => buildHeaderRows(currentColumnDefs), [structureKey]);
 
   const totalHeight = getTotalHeight(totalRows, rowHeight);
 

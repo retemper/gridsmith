@@ -130,6 +130,27 @@ export function buildHeaderRows(columns: readonly ColumnDef[]): HeaderCell[][] {
   return rows;
 }
 
+// ─── Structure Key ────────────────────────────────────────
+
+/**
+ * Compact string describing the shape of a column tree: leaf ids and group
+ * nesting, with no width/visibility/pin data. Two trees produce the same key
+ * iff their header layout (depth + spans) is identical, so it's safe to use
+ * as a memo dependency for `buildHeaderRows` / `getHeaderDepth` — resizing a
+ * leaf mutates the tree reference without changing the key.
+ */
+export function columnStructureKey(columns: readonly ColumnDef[]): string {
+  const parts: string[] = [];
+  for (const c of columns) {
+    if (c.children && c.children.length > 0) {
+      parts.push(`${c.id}[${columnStructureKey(c.children)}]`);
+    } else {
+      parts.push(c.id);
+    }
+  }
+  return parts.join(',');
+}
+
 // ─── Tree Mutation ────────────────────────────────────────
 
 /**

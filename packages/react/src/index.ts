@@ -39,5 +39,6 @@ export {
   flattenColumns,
   getHeaderDepth,
   buildHeaderRows,
+  columnStructureKey,
   VERSION,
 } from '@gridsmith/core';

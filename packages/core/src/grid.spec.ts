@@ -288,7 +288,7 @@ describe('resizeColumn', () => {
     expect(cols.find((c) => c.id === 'name')!.width).toBe(200);
   });
 
-  it('emits column:resize and columns:update events', () => {
+  it('emits column:resize (and skips columns:update since leaves are structurally unchanged)', () => {
     const grid = createGrid({ data: sampleData, columns: sampleColumns });
     const resizeFn = vi.fn();
     const updateFn = vi.fn();
@@ -297,7 +297,7 @@ describe('resizeColumn', () => {
 
     grid.resizeColumn('age', 150);
     expect(resizeFn).toHaveBeenCalledWith({ columnId: 'age', width: 150 });
-    expect(updateFn).toHaveBeenCalledTimes(1);
+    expect(updateFn).not.toHaveBeenCalled();
   });
 
   it('clamps to minWidth and maxWidth', () => {
@@ -461,25 +461,32 @@ describe('grouped columns', () => {
     expect(grid.columns.get().find((c) => c.id === 'city')?.width).toBe(150);
   });
 
-  it('emits columnDefs:update and columns:update on resize', () => {
+  it('emits columnDefs:update and column:resize but not columns:update on resize', () => {
     const grid = createGrid({ data: groupedData, columns: groupedColumns });
     const defsFn = vi.fn();
     const colsFn = vi.fn();
+    const resizeFn = vi.fn();
     grid.events.on('columnDefs:update', defsFn);
     grid.events.on('columns:update', colsFn);
+    grid.events.on('column:resize', resizeFn);
 
     grid.resizeColumn('city', 160);
     expect(defsFn).toHaveBeenCalledTimes(1);
-    expect(colsFn).toHaveBeenCalledTimes(1);
+    expect(resizeFn).toHaveBeenCalledTimes(1);
+    // Leaf list is structurally unchanged; only widths changed.
+    expect(colsFn).not.toHaveBeenCalled();
   });
 
   it('reorder is a no-op when the tree has groups', () => {
     const grid = createGrid({ data: groupedData, columns: groupedColumns });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const fn = vi.fn();
     grid.events.on('column:reorder', fn);
     grid.reorderColumn(0, 1);
     expect(fn).not.toHaveBeenCalled();
     expect(grid.columnDefs.get().map((c) => c.id)).toEqual(['name', 'location']);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
   it('setColumns accepts a tree and re-derives leaves', () => {

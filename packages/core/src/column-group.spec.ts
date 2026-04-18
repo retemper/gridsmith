@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildHeaderRows, flattenColumns, getHeaderDepth, setLeafWidth } from './column-group';
+import {
+  buildHeaderRows,
+  columnStructureKey,
+  flattenColumns,
+  getHeaderDepth,
+  setLeafWidth,
+} from './column-group';
 import type { ColumnDef } from './types';
 
 describe('flattenColumns', () => {
@@ -204,6 +210,52 @@ describe('buildHeaderRows', () => {
     const grp = rows[0].find((c) => c.column.id === 'grp');
     expect(grp?.colStart).toBe(1);
     expect(grp?.colSpan).toBe(2);
+  });
+});
+
+describe('columnStructureKey', () => {
+  it('ignores width changes', () => {
+    const a: ColumnDef[] = [{ id: 'x', header: 'X', width: 100 }];
+    const b: ColumnDef[] = [{ id: 'x', header: 'X', width: 200 }];
+    expect(columnStructureKey(a)).toBe(columnStructureKey(b));
+  });
+
+  it('differs when leaf ids change', () => {
+    const a: ColumnDef[] = [{ id: 'a', header: 'A' }];
+    const b: ColumnDef[] = [{ id: 'b', header: 'B' }];
+    expect(columnStructureKey(a)).not.toBe(columnStructureKey(b));
+  });
+
+  it('differs when nesting changes', () => {
+    const flat: ColumnDef[] = [
+      { id: 'a', header: 'A' },
+      { id: 'b', header: 'B' },
+    ];
+    const nested: ColumnDef[] = [
+      {
+        id: 'g',
+        header: 'G',
+        children: [
+          { id: 'a', header: 'A' },
+          { id: 'b', header: 'B' },
+        ],
+      },
+    ];
+    expect(columnStructureKey(flat)).not.toBe(columnStructureKey(nested));
+  });
+
+  it('is stable across resize via setLeafWidth', () => {
+    const tree: ColumnDef[] = [
+      {
+        id: 'g',
+        header: 'G',
+        children: [{ id: 'a', header: 'A', width: 100 }],
+      },
+    ];
+    const before = columnStructureKey(tree);
+    const { columns } = setLeafWidth(tree, 'a', 250);
+    const after = columnStructureKey(columns);
+    expect(before).toBe(after);
   });
 });
 

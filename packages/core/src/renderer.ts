@@ -340,6 +340,18 @@ export function createRenderer(options: RendererOptions): RendererInstance {
     }),
   );
 
+  // Width-only updates skip the header/depth rebuild since the leaf list and
+  // header structure are unchanged.
+  unsubs.push(
+    grid.subscribe('column:resize', () => {
+      columnLayout = computeColumnLayout(grid.columns.get(), config.defaultColumnWidth);
+      updateSizing();
+      clearAllRows();
+      prevRange = null;
+      scheduleRender();
+    }),
+  );
+
   unsubs.push(
     grid.subscribe('sort:change', () => {
       clearAllRows();

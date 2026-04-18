@@ -146,7 +146,10 @@ export function createGrid(options: GridOptions): GridInstance {
       columnDefs.set(result.columns);
       events.emit('column:resize', { columnId, width: clamped });
       events.emit('columnDefs:update', { columnDefs: result.columns });
-      events.emit('columns:update', { columns: columns.get() });
+      // Intentionally no `columns:update`: the leaf list is structurally
+      // unchanged (same ids, order, visibility). Consumers that only care
+      // about widths should listen to `column:resize`; the `columns` signal
+      // still fires because `columnDefs` changed.
     },
 
     reorderColumn(fromIndex: number, toIndex: number): void {
@@ -156,7 +159,12 @@ export function createGrid(options: GridOptions): GridInstance {
       // swapping siblings across groups would either break the tree or only
       // work within a single group — deferred to Phase 2.
       const hasGroups = tree.some((c) => c.children && c.children.length > 0);
-      if (hasGroups) return;
+      if (hasGroups) {
+        console.warn(
+          '[gridsmith] reorderColumn is a no-op when columnDefs contains header groups; cross-group reordering is deferred to Phase 2.',
+        );
+        return;
+      }
       if (
         fromIndex === toIndex ||
         fromIndex < 0 ||

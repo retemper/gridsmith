@@ -50,9 +50,17 @@ export function useGrid(options: UseGridOptions): GridInstance {
 
   // Sync columns when content changes (JSON comparison avoids spurious updates).
   // Memoize the stripped tree by reference so stable `columns` props skip the
-  // recursive strip-and-stringify entirely.
+  // recursive strip-and-stringify entirely. The replacer serializes functions
+  // (e.g. `comparator`) by source so swapping a comparator actually bumps the
+  // key instead of silently comparing equal after `JSON.stringify` drops it.
   const coreColumns = useMemo(() => stripReactFields(options.columns), [options.columns]);
-  const columnsKey = useMemo(() => JSON.stringify(coreColumns), [coreColumns]);
+  const columnsKey = useMemo(
+    () =>
+      JSON.stringify(coreColumns, (_key, value) =>
+        typeof value === 'function' ? String(value) : value,
+      ),
+    [coreColumns],
+  );
   const prevColumnsKeyRef = useRef(columnsKey);
   useEffect(() => {
     if (columnsKey === prevColumnsKeyRef.current) return;
