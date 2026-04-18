@@ -1,4 +1,11 @@
-import type { CellValue, EditorDefinition, EditingPluginApi, EditState, GridPlugin } from './types';
+import type {
+  CellValue,
+  EditorDefinition,
+  EditingPluginApi,
+  EditState,
+  GridPlugin,
+  ValidationPluginApi,
+} from './types';
 
 const builtinEditors: EditorDefinition[] = [
   {
@@ -91,6 +98,29 @@ export function createEditingPlugin(): GridPlugin {
           let finalValue = value;
           if (typeof value === 'string' && editor?.parse) {
             finalValue = editor.parse(value);
+          }
+
+          // Validation. Only runs when a validation plugin is registered and
+          // the column declares a validator. Sync failures in `reject` mode
+          // abort the commit; `warn` commits the value and leaves the error
+          // recorded by the plugin so the UI can flag it.
+          const validationApi = ctx.getPlugin<ValidationPluginApi>('validation');
+          if (validationApi && (col?.validate || col?.asyncValidate)) {
+            const result = validationApi.validateCell(rowIndex, columnId, finalValue);
+            const mode = col?.validationMode ?? 'reject';
+            if (result !== true && mode === 'reject') {
+              // `validateCell` recorded the transient failure for `finalValue`,
+              // but reject-mode never commits that value — so the recorded
+              // error would mislabel the cell. Resync by revalidating against
+              // the value that actually stays in the cell (the pre-edit one).
+              // If the pre-edit value is itself invalid (e.g. malformed seed
+              // data), the cell remains flagged — intentional, since the cell
+              // really does still hold an invalid value.
+              validationApi.validateCell(rowIndex, columnId, originalValue);
+              editState = null;
+              ctx.events.emit('edit:cancel', { rowIndex, columnId });
+              return false;
+            }
           }
 
           editState = null;

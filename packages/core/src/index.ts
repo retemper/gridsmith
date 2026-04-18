@@ -37,6 +37,9 @@ export { createHistoryPlugin } from './history';
 // Fill Handle
 export { createFillHandlePlugin } from './fill-handle';
 
+// Validation
+export { createValidationPlugin } from './validation';
+
 // Column grouping
 export {
   flattenColumns,
@@ -88,6 +91,14 @@ export type {
   FillOperation,
   FillHandlePluginOptions,
   FillHandlePluginApi,
+  ValidationResult,
+  ValidationContext,
+  ValidationMode,
+  ValidationErrorState,
+  ValidationError,
+  ValidationPluginApi,
+  SyncValidator,
+  AsyncValidator,
   CellDecoration,
   CellDecorator,
   PluginContext,
