@@ -1,5 +1,6 @@
 import {
   type CellValue,
+  type ClipboardPluginApi,
   type EditingPluginApi,
   type EditState,
   type FilterEntry,
@@ -12,6 +13,7 @@ import {
   calculateVisibleRange,
   columnStructureKey,
   computeColumnLayout,
+  createClipboardPlugin,
   createEditingPlugin,
   createSelectionPlugin,
   flattenColumns,
@@ -117,7 +119,8 @@ export const Grid = memo(function Grid({
   const [allPlugins] = useState(() => {
     const editingPlugin = createEditingPlugin();
     const selectionPlugin = createSelectionPlugin();
-    const builtins = [editingPlugin, selectionPlugin];
+    const clipboardPlugin = createClipboardPlugin();
+    const builtins = [editingPlugin, selectionPlugin, clipboardPlugin];
     return plugins ? [...builtins, ...plugins] : builtins;
   });
 
@@ -192,6 +195,12 @@ export const Grid = memo(function Grid({
   const selectionApi = useMemo(() => {
     const api = grid.getPlugin<SelectionPluginApi>('selection');
     if (!api) throw new Error('Selection plugin not found — this should not happen');
+    return api;
+  }, [grid]);
+
+  const clipboardApi = useMemo(() => {
+    const api = grid.getPlugin<ClipboardPluginApi>('clipboard');
+    if (!api) throw new Error('Clipboard plugin not found — this should not happen');
     return api;
   }, [grid]);
 
@@ -1129,6 +1138,32 @@ export const Grid = memo(function Grid({
         return;
       }
 
+      // Ctrl/Cmd+C / X / V — clipboard. Only plain modifiers: combos like
+      // Ctrl+Shift+C (DevTools) or Alt+Ctrl+V belong to the browser/OS, so
+      // we explicitly opt out of intercepting them. Sibling inputs (filter
+      // textbox etc.) also keep their native clipboard behavior.
+      if (mod && !e.shiftKey && !e.altKey && !fromTextInput) {
+        const k = e.key.toLowerCase();
+        if (k === 'c') {
+          if (selectionApi.getState().ranges.length === 0) return;
+          e.preventDefault();
+          void clipboardApi.copy();
+          return;
+        }
+        if (k === 'x') {
+          if (selectionApi.getState().ranges.length === 0) return;
+          e.preventDefault();
+          void clipboardApi.cut();
+          return;
+        }
+        if (k === 'v') {
+          if (!selectionApi.getState().activeCell) return;
+          e.preventDefault();
+          void clipboardApi.paste();
+          return;
+        }
+      }
+
       // Escape clears the selection (Excel parity). Only when not editing —
       // the editor's Escape handler runs first via the early-return above.
       if (e.key === 'Escape') {
@@ -1259,9 +1294,15 @@ export const Grid = memo(function Grid({
 
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault();
-        const colDef = currentColumns[focusedCell.colIndex];
-        if (colDef && colDef.editable !== false) {
-          grid.setCell(focusedCell.row, focusedCell.col, null);
+        // Prefer the full selection when it covers more than just the active
+        // cell; fall back to the single focused cell so keyboard-driven focus
+        // without an explicit selection still works.
+        const cleared = clipboardApi.deleteSelection();
+        if (!cleared) {
+          const colDef = currentColumns[focusedCell.colIndex];
+          if (colDef && colDef.editable !== false) {
+            grid.setCell(focusedCell.row, focusedCell.col, null);
+          }
         }
         return;
       }
@@ -1288,6 +1329,7 @@ export const Grid = memo(function Grid({
       currentColumns,
       editingApi,
       selectionApi,
+      clipboardApi,
       grid,
       moveFocusTo,
       stepVisibleCol,

@@ -152,6 +152,9 @@ export interface GridEvents {
   };
   'edit:cancel': { rowIndex: number; columnId: string };
   'selection:change': SelectionState;
+  'clipboard:copy': { range: CellRange; rows: number; cols: number };
+  'clipboard:cut': { range: CellRange; rows: number; cols: number };
+  'clipboard:paste': { target: CellCoord; rows: number; cols: number };
   'plugin:ready': { name: string };
   ready: undefined;
   destroy: undefined;
@@ -242,6 +245,48 @@ export interface EditingPluginApi {
   defineEditor(def: EditorDefinition): void;
   getEditor(name: string): EditorDefinition | undefined;
   setValue(value: CellValue): void;
+}
+
+// ─── Clipboard ────────────────────────────────────────────
+
+/** A 2-D matrix of cell values laid out as rows of columns. */
+export type ClipboardMatrix = readonly (readonly CellValue[])[];
+
+/** Dual-format clipboard payload written on copy/cut. */
+export interface ClipboardPayload {
+  /** Tab-separated values (Excel/Sheets interop format). */
+  text: string;
+  /** Minimal `<table>` HTML. Written for apps that prefer rich paste. */
+  html: string;
+}
+
+export interface ClipboardPluginApi {
+  /**
+   * Serialize the active selection range and write TSV + HTML to the system
+   * clipboard. Resolves `true` on success, `false` if there is nothing to
+   * copy or the Clipboard API is unavailable/denied.
+   */
+  copy(): Promise<boolean>;
+  /** Copy, then null-out the source cells. */
+  cut(): Promise<boolean>;
+  /** Read TSV/HTML from the system clipboard and paste at the active cell. */
+  paste(): Promise<boolean>;
+  /** Clear (set to null) every editable cell in the current selection. */
+  deleteSelection(): boolean;
+  /** Build a TSV+HTML payload for an arbitrary rectangular range. */
+  serializeRange(range: CellRange): ClipboardPayload;
+  /**
+   * Parse a `{ text, html }` clipboard payload into a string matrix. Values
+   * are returned as raw strings — type coercion happens in `applyMatrix`,
+   * where the target column type is known. Returns null if nothing
+   * parseable was provided.
+   */
+  parsePayload(payload: { text?: string; html?: string }): string[][] | null;
+  /**
+   * Write `matrix` into the grid starting at `(startRow, startCol)`. Values
+   * are coerced per target column type. Out-of-bounds cells are skipped.
+   */
+  applyMatrix(matrix: ClipboardMatrix, startRow: number, startCol: string): void;
 }
 
 // ─── Plugin ────────────────────────────────────────────────
