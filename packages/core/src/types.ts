@@ -155,6 +155,13 @@ export interface GridEvents {
   'clipboard:copy': { range: CellRange; rows: number; cols: number };
   'clipboard:cut': { range: CellRange; rows: number; cols: number };
   'clipboard:paste': { target: CellCoord; rows: number; cols: number };
+  // Transaction boundaries fired around `grid.batchUpdate`. The history
+  // plugin uses these to coalesce many mutations into a single undoable
+  // command. Nested batches increment depth — only the outermost end emits
+  // a usable boundary for plugins counting depth themselves.
+  'transaction:begin': { depth: number };
+  'transaction:end': { depth: number };
+  'history:change': { canUndo: boolean; canRedo: boolean; undoSize: number; redoSize: number };
   'plugin:ready': { name: string };
   ready: undefined;
   destroy: undefined;
@@ -289,6 +296,45 @@ export interface ClipboardPluginApi {
   applyMatrix(matrix: ClipboardMatrix, startRow: number, startCol: string): void;
 }
 
+// ─── History ──────────────────────────────────────────────
+
+/**
+ * A single undoable unit. `redo` re-applies the operation; `undo` reverses it.
+ * Implementations should be idempotent under repeated execute/undo cycles and
+ * must not record themselves into the history stack while running — the
+ * history plugin handles suppression via an internal flag.
+ */
+export interface Command {
+  redo(): void;
+  undo(): void;
+  /** Optional human-readable label for debugging/devtools. */
+  readonly label?: string;
+}
+
+export interface HistoryPluginOptions {
+  /** Maximum size of the undo stack (default 100). When exceeded, the oldest entry is dropped. */
+  maxSize?: number;
+}
+
+export interface HistoryPluginApi {
+  undo(): boolean;
+  redo(): boolean;
+  canUndo(): boolean;
+  canRedo(): boolean;
+  /**
+   * Group multiple mutations into a single undoable command. Nested batches
+   * are flattened — only the outermost batch produces a stack entry.
+   */
+  batch(fn: () => void): void;
+  /** Push a custom command directly. Useful for plugins that own their own state. */
+  push(command: Command): void;
+  /** Clear both undo and redo stacks. */
+  clear(): void;
+  getUndoSize(): number;
+  getRedoSize(): number;
+  setMaxSize(size: number): void;
+}
+
 // ─── Plugin ────────────────────────────────────────────────
 
 export interface CellDecoration {
@@ -350,6 +396,12 @@ export interface GridInstance {
   // Cell operations
   getCell(rowIndex: number, columnId: string): CellValue;
   setCell(rowIndex: number, columnId: string, value: CellValue): void;
+  /**
+   * Write a cell by its underlying data index, bypassing the sort/filter view.
+   * Used by undo/redo so a value can be restored even if the row is currently
+   * filtered out. Emits the same `data:change` event as `setCell`.
+   */
+  setCellByDataIndex(dataIndex: number, columnId: string, value: CellValue): void;
 
   // Data operations
   setData(data: Row[]): void;

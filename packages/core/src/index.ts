@@ -31,6 +31,9 @@ export { createSelectionPlugin } from './selection';
 // Clipboard
 export { createClipboardPlugin } from './clipboard';
 
+// History
+export { createHistoryPlugin } from './history';
+
 // Column grouping
 export {
   flattenColumns,
@@ -73,6 +76,9 @@ export type {
   ClipboardPayload,
   ClipboardMatrix,
   ClipboardPluginApi,
+  Command,
+  HistoryPluginApi,
+  HistoryPluginOptions,
   CellDecoration,
   CellDecorator,
   PluginContext,

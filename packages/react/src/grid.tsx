@@ -6,6 +6,7 @@ import {
   type FilterEntry,
   type GridInstance,
   type HeaderCell,
+  type HistoryPluginApi,
   type Row,
   type SelectionPluginApi,
   type VisibleRange,
@@ -15,6 +16,7 @@ import {
   computeColumnLayout,
   createClipboardPlugin,
   createEditingPlugin,
+  createHistoryPlugin,
   createSelectionPlugin,
   flattenColumns,
   getHeaderDepth,
@@ -120,7 +122,8 @@ export const Grid = memo(function Grid({
     const editingPlugin = createEditingPlugin();
     const selectionPlugin = createSelectionPlugin();
     const clipboardPlugin = createClipboardPlugin();
-    const builtins = [editingPlugin, selectionPlugin, clipboardPlugin];
+    const historyPlugin = createHistoryPlugin();
+    const builtins = [editingPlugin, selectionPlugin, clipboardPlugin, historyPlugin];
     return plugins ? [...builtins, ...plugins] : builtins;
   });
 
@@ -201,6 +204,12 @@ export const Grid = memo(function Grid({
   const clipboardApi = useMemo(() => {
     const api = grid.getPlugin<ClipboardPluginApi>('clipboard');
     if (!api) throw new Error('Clipboard plugin not found — this should not happen');
+    return api;
+  }, [grid]);
+
+  const historyApi = useMemo(() => {
+    const api = grid.getPlugin<HistoryPluginApi>('history');
+    if (!api) throw new Error('History plugin not found — this should not happen');
     return api;
   }, [grid]);
 
@@ -1138,6 +1147,23 @@ export const Grid = memo(function Grid({
         return;
       }
 
+      // Ctrl/Cmd+Z (undo), Ctrl/Cmd+Shift+Z and Ctrl/Cmd+Y (redo). Sibling
+      // inputs keep native undo so the filter textbox still works.
+      if (mod && !e.altKey && !fromTextInput) {
+        const k = e.key.toLowerCase();
+        if (k === 'z') {
+          e.preventDefault();
+          if (e.shiftKey) historyApi.redo();
+          else historyApi.undo();
+          return;
+        }
+        if (k === 'y' && !e.shiftKey) {
+          e.preventDefault();
+          historyApi.redo();
+          return;
+        }
+      }
+
       // Ctrl/Cmd+C / X / V — clipboard. Only plain modifiers: combos like
       // Ctrl+Shift+C (DevTools) or Alt+Ctrl+V belong to the browser/OS, so
       // we explicitly opt out of intercepting them. Sibling inputs (filter
@@ -1330,6 +1356,7 @@ export const Grid = memo(function Grid({
       editingApi,
       selectionApi,
       clipboardApi,
+      historyApi,
       grid,
       moveFocusTo,
       stepVisibleCol,

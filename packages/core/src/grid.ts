@@ -59,9 +59,23 @@ export function createGrid(options: GridOptions): GridInstance {
   const pluginManager = createPluginManager(initialPlugins);
 
   let destroyed = false;
+  let txDepth = 0;
 
   const assertAlive = () => {
     if (destroyed) throw new Error('Grid instance has been destroyed');
+  };
+
+  const writeCellByDataIndex = (dataIndex: number, columnId: string, value: CellValue): void => {
+    const row = data[dataIndex];
+    if (!row) throw new RangeError(`Data index ${dataIndex} out of range`);
+    const oldValue = row[columnId];
+    if (Object.is(oldValue, value)) return;
+
+    row[columnId] = value;
+    dataVersion.update((v) => v + 1);
+    events.emit('data:change', {
+      changes: [{ row: dataIndex, col: columnId, oldValue, newValue: value }],
+    });
   };
 
   const grid: GridInstance = {
@@ -104,16 +118,12 @@ export function createGrid(options: GridOptions): GridInstance {
     setCell(rowIndex: number, columnId: string, value: CellValue): void {
       assertAlive();
       const dataIndex = indexMap.get().viewToData(rowIndex);
-      const row = data[dataIndex];
-      if (!row) throw new RangeError(`Data index ${dataIndex} out of range`);
-      const oldValue = row[columnId];
-      if (Object.is(oldValue, value)) return;
+      writeCellByDataIndex(dataIndex, columnId, value);
+    },
 
-      row[columnId] = value;
-      dataVersion.update((v) => v + 1);
-      events.emit('data:change', {
-        changes: [{ row: dataIndex, col: columnId, oldValue, newValue: value }],
-      });
+    setCellByDataIndex(dataIndex: number, columnId: string, value: CellValue): void {
+      assertAlive();
+      writeCellByDataIndex(dataIndex, columnId, value);
     },
 
     setData(newData: Row[]): void {
@@ -188,7 +198,15 @@ export function createGrid(options: GridOptions): GridInstance {
     },
 
     batchUpdate(fn: () => void): void {
-      batch(fn);
+      txDepth++;
+      events.emit('transaction:begin', { depth: txDepth });
+      try {
+        batch(fn);
+      } finally {
+        const endingDepth = txDepth;
+        txDepth--;
+        events.emit('transaction:end', { depth: endingDepth });
+      }
     },
 
     getPlugin<T>(name: string): T | undefined {
