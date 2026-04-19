@@ -373,6 +373,166 @@ describe('async data plugin', () => {
     });
   });
 
+  describe('validation & edge cases', () => {
+    it('throws when pageSize is not a positive finite number', () => {
+      const source = makeFakeSource({ total: 0 });
+      expect(() => createAsyncDataPlugin({ source, pageSize: 0 })).toThrow(/pageSize/);
+      expect(() => createAsyncDataPlugin({ source, pageSize: -1 })).toThrow(/pageSize/);
+      expect(() => createAsyncDataPlugin({ source, pageSize: Infinity })).toThrow(/pageSize/);
+    });
+
+    it('loadRange is a no-op when totalCount is 0 or range is inverted', async () => {
+      const source = makeFakeSource({ total: 0 });
+      const grid = createGrid({
+        data: [],
+        columns,
+        plugins: [createAsyncDataPlugin({ source, pageSize: 50 })],
+      });
+      const api = grid.getPlugin<AsyncDataPluginApi>('async-data')!;
+      await flushMicrotasks();
+
+      await api.loadRange(0, 10);
+      await api.loadRange(10, 5); // inverted
+      expect(source.calls).toBe(0);
+    });
+
+    it('isLoading reflects in-flight state', async () => {
+      vi.useFakeTimers();
+      const source = makeFakeSource({ total: 100, delay: 50 });
+      const grid = createGrid({
+        data: [],
+        columns,
+        plugins: [createAsyncDataPlugin({ source, pageSize: 50 })],
+      });
+      const api = grid.getPlugin<AsyncDataPluginApi>('async-data')!;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(api.isLoading()).toBe(false);
+      const p = api.loadRange(0, 49);
+      expect(api.isLoading()).toBe(true);
+      await vi.advanceTimersByTimeAsync(100);
+      await p;
+      expect(api.isLoading()).toBe(false);
+    });
+
+    it('wraps non-Error rejections into an Error on asyncData:error', async () => {
+      const source: AsyncDataSource = {
+        getRows: () => Promise.resolve([]),
+        getRowCount: () => Promise.reject('string failure'),
+      };
+      const errorSpy = vi.fn();
+      const grid = createGrid({
+        data: [],
+        columns,
+        plugins: [createAsyncDataPlugin({ source })],
+      });
+      grid.events.on('asyncData:error', errorSpy);
+      await flushMicrotasks();
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy.mock.calls[0][0].error).toBeInstanceOf(Error);
+      expect(errorSpy.mock.calls[0][0].error.message).toBe('string failure');
+    });
+
+    it('respects serverSideSort: false (sort events ignored)', async () => {
+      const source = makeFakeSource({ total: 100 });
+      const grid = createGrid({
+        data: [],
+        columns,
+        plugins: [createAsyncDataPlugin({ source, pageSize: 50, serverSideSort: false })],
+      });
+      const api = grid.getPlugin<AsyncDataPluginApi>('async-data')!;
+      await flushMicrotasks();
+      await api.loadRange(0, 49);
+      expect(api.isRowLoaded(0)).toBe(true);
+
+      grid.sortState.set([{ columnId: 'b', direction: 'asc' }]);
+      // Cache not invalidated — row still loaded.
+      expect(api.isRowLoaded(0)).toBe(true);
+    });
+
+    it('respects serverSideFilter: false (filter events ignored)', async () => {
+      let countCalls = 0;
+      const source: AsyncDataSource = {
+        getRows: () => Promise.resolve([]),
+        getRowCount: () => {
+          countCalls++;
+          return Promise.resolve(100);
+        },
+      };
+      const grid = createGrid({
+        data: [],
+        columns,
+        plugins: [createAsyncDataPlugin({ source, pageSize: 50, serverSideFilter: false })],
+      });
+      await flushMicrotasks();
+      expect(countCalls).toBe(1);
+
+      grid.filterState.set([{ columnId: 'a', operator: 'contains', value: 'x' }]);
+      await flushMicrotasks();
+      // Count not refetched — filter events are local-only.
+      expect(countCalls).toBe(1);
+    });
+
+    it('tolerates short server responses (fewer rows than requested)', async () => {
+      const source: AsyncDataSource = {
+        getRowCount: () => Promise.resolve(100),
+        // Return only 30 rows for a 50-row page request — last 20 slots stay placeholders.
+        getRows: (p) => {
+          const rows: Row[] = [];
+          for (let i = p.start; i < p.start + 30 && i < p.end; i++) rows.push(rowAt(i));
+          return Promise.resolve(rows);
+        },
+      };
+      const grid = createGrid({
+        data: [],
+        columns,
+        plugins: [createAsyncDataPlugin({ source, pageSize: 50 })],
+      });
+      const api = grid.getPlugin<AsyncDataPluginApi>('async-data')!;
+      await flushMicrotasks();
+
+      await api.loadRange(0, 49);
+      expect(api.isRowLoaded(0)).toBe(true);
+      expect(api.isRowLoaded(29)).toBe(true);
+      expect(api.isRowLoaded(30)).toBe(false);
+    });
+
+    it('plugin destroy cancels in-flight fetches', async () => {
+      vi.useFakeTimers();
+      const abortedSignals: AbortSignal[] = [];
+      const source: AsyncDataSource = {
+        getRowCount: () => Promise.resolve(100),
+        getRows: (params) => {
+          if (params.signal) abortedSignals.push(params.signal);
+          return new Promise<readonly Row[]>((resolve, reject) => {
+            const t = setTimeout(() => resolve([]), 100);
+            params.signal?.addEventListener('abort', () => {
+              clearTimeout(t);
+              const err = new Error('aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          });
+        },
+      };
+      const grid = createGrid({
+        data: [],
+        columns,
+        plugins: [createAsyncDataPlugin({ source, pageSize: 50 })],
+      });
+      const api = grid.getPlugin<AsyncDataPluginApi>('async-data')!;
+      await vi.advanceTimersByTimeAsync(0);
+
+      const p = api.loadRange(0, 49);
+      grid.destroy();
+      await vi.advanceTimersByTimeAsync(200);
+      await p;
+
+      expect(abortedSignals[0].aborted).toBe(true);
+    });
+  });
+
   describe('cancellation', () => {
     it('aborts in-flight fetches when sort invalidates', async () => {
       vi.useFakeTimers();
