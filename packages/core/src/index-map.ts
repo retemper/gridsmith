@@ -1,3 +1,4 @@
+import { PLACEHOLDER_ROW } from './row-meta';
 import type {
   CellComparator,
   CellValue,
@@ -124,6 +125,11 @@ export function buildIndexMap(
     indices = indices.filter((dataIndex) => {
       const row = data[dataIndex];
       if (!row) return false;
+      // Async placeholders carry no real values yet; applying a predicate
+      // against undefined would hide every not-yet-loaded row and collapse
+      // the view during a refetch. Pass them through — once the real row
+      // arrives, the plugin bumps `dataVersion` and the filter re-runs.
+      if ((row as Row & { [PLACEHOLDER_ROW]?: true })[PLACEHOLDER_ROW]) return true;
       return filterState.every((f, i) => matchesFilter(row[f.columnId], f, compiledRegex[i]));
     });
   }
