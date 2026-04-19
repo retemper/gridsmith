@@ -43,6 +43,9 @@ export { createValidationPlugin } from './validation';
 // Async data source
 export { createAsyncDataPlugin } from './async-data';
 
+// Change tracking
+export { createChangesPlugin } from './changes';
+
 // Column grouping
 export {
   flattenColumns,
@@ -102,6 +105,7 @@ export type {
   ValidationPluginApi,
   SyncValidator,
   AsyncValidator,
+  ChangesPluginApi,
   AsyncDataSource,
   AsyncDataSourceParams,
   AsyncDataSourceCountParams,
