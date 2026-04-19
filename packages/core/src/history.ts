@@ -151,6 +151,12 @@ export function createHistoryPlugin(options: HistoryPluginOptions = {}): GridPlu
   // mirror command onto the stack.
   let isApplying = false;
 
+  // Refcount for external callers that need to write data without polluting
+  // the undo stack (async-data loaders, server reconciliation, etc.). When
+  // nonzero, every `data:change` / `sort:change` / `column:reorder` listener
+  // short-circuits the same way it does during undo replay.
+  let suppressDepth = 0;
+
   // Open transactions are buffered into `pending`. When the outermost
   // transaction ends we flush exactly one composite command. Standalone
   // mutations (no transaction wrapper) flush immediately at depth 0.
@@ -223,7 +229,7 @@ export function createHistoryPlugin(options: HistoryPluginOptions = {}): GridPlu
       // ─── Listeners ────────────────────────────────────
 
       const unsubData = ctx.events.on('data:change', ({ changes }) => {
-        if (isApplying) return;
+        if (isApplying || suppressDepth > 0) return;
         for (const c of changes) pending.cellChanges.push({ ...c });
         if (txDepth === 0) flushPending();
       });
@@ -231,7 +237,7 @@ export function createHistoryPlugin(options: HistoryPluginOptions = {}): GridPlu
       const unsubSort = ctx.events.on('sort:change', ({ sort }) => {
         const before = lastSort;
         lastSort = cloneSort(sort);
-        if (isApplying) return;
+        if (isApplying || suppressDepth > 0) return;
         // First sort change in the transaction owns `before`; later changes
         // only update `after` so a single command captures the net delta.
         if (pending.sortBefore === null) pending.sortBefore = before;
@@ -240,7 +246,7 @@ export function createHistoryPlugin(options: HistoryPluginOptions = {}): GridPlu
       });
 
       const unsubReorder = ctx.events.on('column:reorder', ({ columnId, fromIndex, toIndex }) => {
-        if (isApplying) return;
+        if (isApplying || suppressDepth > 0) return;
         pending.reorders.push({ columnId, fromIndex, toIndex });
         if (txDepth === 0) flushPending();
       });
@@ -259,7 +265,7 @@ export function createHistoryPlugin(options: HistoryPluginOptions = {}): GridPlu
       // `setCellByDataIndex` or apply to the wrong column. Drop both stacks
       // when the underlying schema changes from outside the history surface.
       const unsubRows = ctx.events.on('data:rowsUpdate', () => {
-        if (isApplying) return;
+        if (isApplying || suppressDepth > 0) return;
         if (undoStack.length === 0 && redoStack.length === 0) return;
         undoStack.length = 0;
         redoStack.length = 0;
@@ -269,7 +275,7 @@ export function createHistoryPlugin(options: HistoryPluginOptions = {}): GridPlu
         const nextIds = columnIdSet(columns);
         if (nextIds === lastColumnIds) return;
         lastColumnIds = nextIds;
-        if (isApplying) return;
+        if (isApplying || suppressDepth > 0) return;
         if (undoStack.length === 0 && redoStack.length === 0) return;
         undoStack.length = 0;
         redoStack.length = 0;
@@ -327,7 +333,7 @@ export function createHistoryPlugin(options: HistoryPluginOptions = {}): GridPlu
         },
 
         push(command: Command) {
-          if (isApplying) return;
+          if (isApplying || suppressDepth > 0) return;
           pushCommand(command);
         },
 
@@ -350,6 +356,22 @@ export function createHistoryPlugin(options: HistoryPluginOptions = {}): GridPlu
           maxSize = Math.max(1, Math.floor(size));
           while (undoStack.length > maxSize) undoStack.shift();
           emitChange();
+        },
+
+        suppress<T>(fn: () => T): T {
+          suppressDepth++;
+          try {
+            return fn();
+          } finally {
+            suppressDepth--;
+            // If suppression was nested inside an open transaction, the
+            // `data:change` events we ignored won't be replayed — they never
+            // entered `pending`. Discard any pending entries that a concurrent
+            // listener happened to queue, so the next real edit starts clean.
+            if (suppressDepth === 0 && txDepth === 0) {
+              pending = emptyTx();
+            }
+          }
         },
       };
 

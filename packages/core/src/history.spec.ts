@@ -376,4 +376,41 @@ describe('history plugin', () => {
       expect(history.getRedoSize()).toBe(1);
     });
   });
+
+  describe('suppress', () => {
+    it('skips recording for writes inside the callback', () => {
+      const { grid, history } = setup();
+      history.suppress(() => {
+        grid.setCell(0, 'a', 'suppressed');
+      });
+      expect(grid.getCell(0, 'a')).toBe('suppressed');
+      expect(history.canUndo()).toBe(false);
+    });
+
+    it('is refcounted — nested suppress resumes recording only when fully exited', () => {
+      const { grid, history } = setup();
+      history.suppress(() => {
+        history.suppress(() => {
+          grid.setCell(0, 'a', 'inner');
+        });
+        // Still suppressed at outer level.
+        grid.setCell(0, 'a', 'outer');
+      });
+      expect(history.canUndo()).toBe(false);
+      grid.setCell(0, 'a', 'after');
+      expect(history.canUndo()).toBe(true);
+    });
+
+    it('history.push is also suppressed', () => {
+      const { history } = setup();
+      history.suppress(() => {
+        history.push({
+          label: 'noop',
+          redo: () => {},
+          undo: () => {},
+        });
+      });
+      expect(history.getUndoSize()).toBe(0);
+    });
+  });
 });

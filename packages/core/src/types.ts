@@ -181,6 +181,10 @@ export interface GridEvents {
   'transaction:end': { depth: number };
   'history:change': { canUndo: boolean; canRedo: boolean; undoSize: number; redoSize: number };
   'validation:change': { errors: readonly ValidationError[] };
+  'asyncData:ready': { totalCount: number };
+  'asyncData:loading': { start: number; end: number };
+  'asyncData:loaded': { start: number; end: number; totalCount: number };
+  'asyncData:error': { error: Error; start?: number; end?: number };
   'plugin:ready': { name: string };
   ready: undefined;
   destroy: undefined;
@@ -421,6 +425,13 @@ export interface HistoryPluginApi {
   getUndoSize(): number;
   getRedoSize(): number;
   setMaxSize(size: number): void;
+  /**
+   * Run `fn` with history recording paused. Nested suppressions are refcounted
+   * — the inner call returns control to the outer suppression without
+   * resuming recording prematurely. Used by async data loaders to populate
+   * cells without polluting the user's undo stack.
+   */
+  suppress<T>(fn: () => T): T;
 }
 
 // ─── Validation ───────────────────────────────────────────
@@ -511,6 +522,85 @@ export interface ValidationPluginApi {
    * - `(rowIndex, columnId)` — clear a single cell.
    */
   clearErrors(rowIndex?: number, columnId?: string): void;
+}
+
+// ─── Async Data Source ────────────────────────────────────
+
+/**
+ * Parameters for a row-window fetch. `start` is inclusive, `end` is exclusive —
+ * `[start, end)` matches the idiomatic JS slice range. When `sort` or `filter`
+ * is omitted the source should return rows in its natural order.
+ *
+ * `signal` lets the caller cancel a stale fetch when the plugin invalidates
+ * (e.g. the user changed sort mid-flight). Sources that honor the signal can
+ * avoid wasted server work.
+ */
+export interface AsyncDataSourceParams {
+  start: number;
+  end: number;
+  sort?: SortState;
+  filter?: FilterState;
+  signal?: AbortSignal;
+}
+
+/** Arguments for `getRowCount` — only sort/filter can change the total. */
+export interface AsyncDataSourceCountParams {
+  sort?: SortState;
+  filter?: FilterState;
+  signal?: AbortSignal;
+}
+
+/**
+ * Data source contract for server-backed grids. Implementations must return
+ * `[start, end)` rows for `getRows` — fewer rows are permitted only when the
+ * window runs past the end of the dataset. `getRowCount` reports the total
+ * rows the server would return under the given filter (sort doesn't affect
+ * total, but is passed so implementations can cache per-query).
+ */
+export interface AsyncDataSource {
+  getRows(params: AsyncDataSourceParams): Promise<readonly Row[]>;
+  getRowCount(params?: AsyncDataSourceCountParams): Promise<number>;
+}
+
+export interface AsyncDataPluginOptions {
+  source: AsyncDataSource;
+  /**
+   * Rows per fetch window. Ranges requested via `loadRange` are rounded out
+   * to full page boundaries so repeated scrolls through the same region don't
+   * issue overlapping fetches. Default 100.
+   */
+  pageSize?: number;
+  /**
+   * When true (default), `sort:change` invalidates the cache and refetches
+   * with the new sort. When false, the source is expected to be server-sorted
+   * once at init and client-side sort is applied to the loaded window.
+   */
+  serverSideSort?: boolean;
+  /**
+   * When true (default), `filter:change` invalidates the cache, re-fetches
+   * the total count, and refetches with the new filter.
+   */
+  serverSideFilter?: boolean;
+}
+
+export interface AsyncDataPluginApi {
+  /**
+   * Ensure rows in the given view-range are loaded. `start` and `endInclusive`
+   * are view indices; the plugin resolves them to data indices and fetches
+   * any pages that contain unloaded rows. No-op for fully-loaded ranges.
+   */
+  loadRange(start: number, endInclusive: number): Promise<void>;
+  /**
+   * Invalidate the cache, re-fetch row count, and reset to placeholders.
+   * Typically called after the underlying dataset changes on the server.
+   */
+  refresh(): Promise<void>;
+  /** Total row count last reported by the server. */
+  getTotalCount(): number;
+  /** True if every cell in the row has been loaded. */
+  isRowLoaded(dataIndex: number): boolean;
+  /** True while any fetch is in flight. */
+  isLoading(): boolean;
 }
 
 // ─── Plugin ────────────────────────────────────────────────

@@ -40,6 +40,9 @@ export { createFillHandlePlugin } from './fill-handle';
 // Validation
 export { createValidationPlugin } from './validation';
 
+// Async data source
+export { createAsyncDataPlugin } from './async-data';
+
 // Column grouping
 export {
   flattenColumns,
@@ -99,6 +102,11 @@ export type {
   ValidationPluginApi,
   SyncValidator,
   AsyncValidator,
+  AsyncDataSource,
+  AsyncDataSourceParams,
+  AsyncDataSourceCountParams,
+  AsyncDataPluginOptions,
+  AsyncDataPluginApi,
   CellDecoration,
   CellDecorator,
   PluginContext,

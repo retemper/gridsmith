@@ -1,4 +1,5 @@
 import {
+  type AsyncDataPluginApi,
   type CellRange,
   type CellValue,
   type ClipboardPluginApi,
@@ -391,6 +392,20 @@ export const Grid = memo(function Grid({
   useEffect(() => {
     updateRange();
   }, [totalRows, columnLayout, updateRange]);
+
+  // Async data source: when the `async-data` plugin is installed, ask it to
+  // fetch the currently-visible window whenever the range (or total row
+  // count, on `setData` resets) moves. No-op when the plugin isn't registered.
+  useEffect(() => {
+    if (!visibleRange) return;
+    const asyncApi = grid.getPlugin<AsyncDataPluginApi>('async-data');
+    if (!asyncApi) return;
+    if (visibleRange.rowStart > visibleRange.rowEnd) return;
+    // Fire-and-forget — `loadRange` is idempotent for already-loaded pages
+    // and dedupes in-flight ones, so a stale range from a superseded effect
+    // can't pile up duplicate fetches.
+    void asyncApi.loadRange(visibleRange.rowStart, visibleRange.rowEnd);
+  }, [visibleRange, totalRows, grid]);
 
   // ─── Sort / Filter interaction ─────────────────────────
 
