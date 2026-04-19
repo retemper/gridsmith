@@ -181,6 +181,9 @@ export interface GridEvents {
   'transaction:end': { depth: number };
   'history:change': { canUndo: boolean; canRedo: boolean; undoSize: number; redoSize: number };
   'validation:change': { errors: readonly ValidationError[] };
+  'changes:update': { dirty: readonly CellChange[] };
+  'changes:commit': { changes: readonly CellChange[] };
+  'changes:revert': { changes: readonly CellChange[] };
   'asyncData:ready': { totalCount: number };
   'asyncData:loading': { start: number; end: number };
   'asyncData:loaded': { start: number; end: number; totalCount: number };
@@ -522,6 +525,48 @@ export interface ValidationPluginApi {
    * - `(rowIndex, columnId)` — clear a single cell.
    */
   clearErrors(rowIndex?: number, columnId?: string): void;
+}
+
+// ─── Change Tracking ──────────────────────────────────────
+
+/**
+ * Tracks which cells have been edited since the last `commit()`/`revert()`
+ * (or since the plugin was initialized). Each dirty entry records the value
+ * the cell held when it first became dirty (`oldValue`) and the latest value
+ * written to it (`newValue`); `row` is a stable data-index so the record
+ * survives sort/filter and pinned-row reindexing.
+ *
+ * A cell that is edited back to its original value ceases to be dirty and
+ * drops out of the map (same equality rules as `writeCellByDataIndex`, with
+ * `Date`-epoch equality on top so identical dates don't linger).
+ */
+export interface ChangesPluginApi {
+  /**
+   * Every currently dirty cell. `CellChange.row` here is a **data-index** —
+   * stable across sort, filter, and pinned-row reindexing — not the view-row
+   * that `isDirty` takes. Use `grid.indexMap.get().dataToView(change.row)` to
+   * locate a dirty cell in the current view, or `null` when it's filtered out.
+   */
+  getDirty(): CellChange[];
+  /**
+   * `true` when the cell is currently dirty. `rowIndex` is a **view-row**; a
+   * filtered-out data-row cannot be queried through this API (returns `false`).
+   * Use `getDirty()` to enumerate dirty cells outside the current view.
+   */
+  isDirty(rowIndex: number, columnId: string): boolean;
+  /**
+   * Accept every outstanding edit as the new baseline: clears the dirty set
+   * and emits `changes:commit` with the committed snapshot followed by
+   * `changes:update` with the now-empty dirty list. Does not touch the grid's
+   * cell values or undo history.
+   */
+  commit(): void;
+  /**
+   * Restore every dirty cell to its `oldValue`. The writes are wrapped in a
+   * single `grid.batchUpdate` so they appear as one undoable step. Emits
+   * `changes:revert` with the pre-revert snapshot once the writes settle.
+   */
+  revert(): void;
 }
 
 // ─── Async Data Source ────────────────────────────────────
