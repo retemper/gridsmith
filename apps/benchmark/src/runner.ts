@@ -19,7 +19,7 @@ export async function runBenchmark(
   const editLatencyMs = await measureEditLatency(handle, Math.floor(rows.length / 2));
 
   const memAfter = memoryUsageMb();
-  const memoryMb = memBefore != null && memAfter != null ? memAfter - memBefore : memAfter;
+  const memoryMb = memBefore != null && memAfter != null ? memAfter - memBefore : null;
 
   handle.destroy();
   await waitForPaint();

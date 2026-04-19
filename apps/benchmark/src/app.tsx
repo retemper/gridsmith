@@ -36,7 +36,10 @@ export function App(): React.ReactElement {
     fetch('/bundle-sizes.json')
       .then((r) => (r.ok ? r.json() : {}))
       .then((data: BundleSizeMap) => setBundleSizes(data))
-      .catch(() => setBundleSizes({}));
+      .catch((err) => {
+        console.warn('[benchmark] bundle-sizes.json unavailable — run `pnpm bundle-sizes`', err);
+        setBundleSizes({});
+      });
   }, []);
 
   async function runAll(): Promise<void> {

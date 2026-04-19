@@ -1,6 +1,6 @@
 import { VERSION, type Row } from '@gridsmith/core';
 import { Grid, type GridColumnDef } from '@gridsmith/react';
-import { StrictMode, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { waitForPaint } from '../metrics';
@@ -52,14 +52,12 @@ export const gridsmithAdapter: GridAdapter = {
     container.appendChild(host);
     const root: Root = createRoot(host);
     root.render(
-      <StrictMode>
-        <GridsmithApp
-          rows={rows}
-          registerMutate={(fn) => {
-            mutate = fn;
-          }}
-        />
-      </StrictMode>,
+      <GridsmithApp
+        rows={rows}
+        registerMutate={(fn) => {
+          mutate = fn;
+        }}
+      />,
     );
     await waitForPaint();
     return {

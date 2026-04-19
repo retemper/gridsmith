@@ -35,6 +35,7 @@ export const handsontableAdapter: GridAdapter = {
   version: '14.x',
   async mount(container: HTMLElement, rows: BenchmarkRow[]): Promise<GridHandle> {
     const hotRef = createRef<ComponentRef<typeof HotTable>>();
+    const data = rows.map((r) => ({ ...r }));
     const host = document.createElement('div');
     host.style.cssText = 'width:100%;height:100%;overflow:hidden;';
     container.appendChild(host);
@@ -42,7 +43,7 @@ export const handsontableAdapter: GridAdapter = {
     root.render(
       <HotTable
         ref={hotRef}
-        data={rows}
+        data={data}
         columns={COLUMNS}
         rowHeights={32}
         colHeaders={true}
