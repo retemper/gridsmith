@@ -345,6 +345,7 @@ describe('validation plugin', () => {
       expect(decorations[0].className).toBe('gs-cell--invalid');
       expect(decorations[0].attributes?.['data-validation-state']).toBe('invalid');
       expect(decorations[0].attributes?.['data-validation-message']).toBe('Required');
+      expect(decorations[0].attributes?.['aria-invalid']).toBe('true');
     });
 
     it('decorates a pending cell with the validating class', () => {
@@ -362,6 +363,8 @@ describe('validation plugin', () => {
       const decorations = grid.getCellDecorations(0, 'name');
       expect(decorations).toHaveLength(1);
       expect(decorations[0].className).toBe('gs-cell--validating');
+      // Pending is not an error yet — aria-invalid should stay off.
+      expect(decorations[0].attributes?.['aria-invalid']).toBeUndefined();
       d.resolve(true);
     });
   });

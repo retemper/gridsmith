@@ -636,4 +636,82 @@ describe('Grid', () => {
       expect(first?.getAttribute('draggable')).toBe('true');
     });
   });
+
+  describe('ARIA grid pattern', () => {
+    it('sets role="grid" with row/col counts on the root', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      const root = container.querySelector('.gs-grid') as HTMLElement;
+      expect(root.getAttribute('role')).toBe('grid');
+      // 1 header row + 2 data rows = 3
+      expect(root.getAttribute('aria-rowcount')).toBe('3');
+      expect(root.getAttribute('aria-colcount')).toBe('2');
+    });
+
+    it('applies aria-rowindex/colindex to header and cells', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      const headerCells = container.querySelectorAll('.gs-header-cell');
+      expect(headerCells[0].getAttribute('aria-rowindex')).toBe('1');
+      expect(headerCells[0].getAttribute('aria-colindex')).toBe('1');
+      expect(headerCells[1].getAttribute('aria-colindex')).toBe('2');
+
+      const firstRow = container.querySelector('.gs-row') as HTMLElement;
+      expect(firstRow.getAttribute('role')).toBe('row');
+      expect(firstRow.getAttribute('aria-rowindex')).toBe('2');
+
+      const cells = firstRow.querySelectorAll('.gs-cell');
+      expect(cells[0].getAttribute('role')).toBe('gridcell');
+      expect(cells[0].getAttribute('aria-colindex')).toBe('1');
+    });
+
+    it('sets aria-colspan on group headers', () => {
+      const grouped: GridColumnDef[] = [
+        {
+          id: 'person',
+          header: 'Person',
+          children: [
+            { id: 'name', header: 'Name' },
+            { id: 'age', header: 'Age' },
+          ],
+        },
+      ];
+      const { container } = render(<Grid data={data} columns={grouped} />);
+      const group = container.querySelector('.gs-header-cell--group') as HTMLElement;
+      expect(group.getAttribute('role')).toBe('columnheader');
+      expect(group.getAttribute('aria-colspan')).toBe('2');
+    });
+
+    it('sets aria-readonly on cells whose column is not editable', () => {
+      const cols: GridColumnDef[] = [
+        { id: 'name', header: 'Name', editable: false },
+        { id: 'age', header: 'Age' },
+      ];
+      const { container } = render(<Grid data={data} columns={cols} />);
+      const firstRow = container.querySelector('.gs-row') as HTMLElement;
+      const rowCells = firstRow.querySelectorAll('.gs-cell');
+      expect(rowCells[0].getAttribute('aria-readonly')).toBe('true');
+      expect(rowCells[1].getAttribute('aria-readonly')).toBeNull();
+    });
+
+    it('tracks aria-activedescendant against the focused cell id', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      const root = container.querySelector('.gs-grid') as HTMLElement;
+      const firstCell = container.querySelector('.gs-cell') as HTMLElement;
+
+      fireEvent.mouseDown(firstCell);
+      fireEvent.mouseUp(firstCell);
+
+      const activeId = root.getAttribute('aria-activedescendant');
+      expect(activeId).toBeTruthy();
+      expect(firstCell.id).toBe(activeId);
+    });
+
+    it('renders polite and assertive live regions', () => {
+      const { container } = render(<Grid data={data} columns={columns} />);
+      const live = container.querySelectorAll('[aria-live]');
+      expect(live.length).toBe(2);
+      const politeness = Array.from(live).map((el) => el.getAttribute('aria-live'));
+      expect(politeness).toContain('polite');
+      expect(politeness).toContain('assertive');
+    });
+  });
 });

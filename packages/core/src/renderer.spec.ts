@@ -3,7 +3,9 @@ import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 
 import { createGrid } from './grid';
 import { createRenderer, type RendererInstance } from './renderer';
-import type { ColumnDef, Row } from './types';
+import { createSelectionPlugin } from './selection';
+import type { ColumnDef, Row, SelectionPluginApi, ValidationPluginApi } from './types';
+import { createValidationPlugin } from './validation';
 
 // ─── Helpers ──────────────────────────────────────────────
 
@@ -323,5 +325,243 @@ describe('createRenderer', () => {
 
     const header = container.querySelector('.gs-header') as HTMLElement;
     expect(header.style.height).toBe('40px');
+  });
+
+  // ─── ARIA grid pattern ────────────────────────────────
+
+  it('sets role="grid" and row/col counts on the root', () => {
+    const grid = createGrid({ data: makeRows(12), columns });
+    renderer = createRenderer({ container, grid });
+
+    const root = container.querySelector('.gs-grid') as HTMLElement;
+    expect(root.getAttribute('role')).toBe('grid');
+    // 1 header row + 12 data rows = 13
+    expect(root.getAttribute('aria-rowcount')).toBe('13');
+    expect(root.getAttribute('aria-colcount')).toBe('3');
+  });
+
+  it('sets role="row" + aria-rowindex on header and data rows', () => {
+    const grid = createGrid({ data: makeRows(5), columns });
+    renderer = createRenderer({ container, grid });
+
+    const headerRow = container.querySelector('.gs-header-row') as HTMLElement;
+    expect(headerRow.getAttribute('role')).toBe('row');
+    expect(headerRow.getAttribute('aria-rowindex')).toBe('1');
+
+    const firstDataRow = container.querySelector('.gs-row') as HTMLElement;
+    expect(firstDataRow.getAttribute('role')).toBe('row');
+    // headerDepth=1, viewIndex=0 → aria-rowindex=2
+    expect(firstDataRow.getAttribute('aria-rowindex')).toBe('2');
+  });
+
+  it('offsets aria-rowindex by header depth with nested groups', () => {
+    const grouped: ColumnDef[] = [
+      {
+        id: 'person',
+        header: 'Person',
+        children: [
+          { id: 'name', header: 'Name', width: 100 },
+          { id: 'age', header: 'Age', width: 80 },
+        ],
+      },
+    ];
+    const grid = createGrid({ data: makeRows(3), columns: grouped });
+    renderer = createRenderer({ container, grid });
+
+    const root = container.querySelector('.gs-grid') as HTMLElement;
+    // headerDepth=2, 3 data rows → 5
+    expect(root.getAttribute('aria-rowcount')).toBe('5');
+
+    const firstDataRow = container.querySelector('.gs-row') as HTMLElement;
+    expect(firstDataRow.getAttribute('aria-rowindex')).toBe('3');
+  });
+
+  it('sets role="gridcell" + aria-colindex on cells', () => {
+    const grid = createGrid({ data: makeRows(3), columns });
+    renderer = createRenderer({ container, grid });
+
+    const cells = container.querySelectorAll('.gs-row:first-of-type .gs-cell');
+    expect(cells[0].getAttribute('role')).toBe('gridcell');
+    expect(cells[0].getAttribute('aria-colindex')).toBe('1');
+    expect(cells[1].getAttribute('aria-colindex')).toBe('2');
+    expect(cells[2].getAttribute('aria-colindex')).toBe('3');
+  });
+
+  it('sets aria-readonly on cells whose column has editable=false', () => {
+    const readonlyColumns: ColumnDef[] = [
+      { id: 'name', header: 'Name', width: 120, editable: false },
+      { id: 'age', header: 'Age', width: 80 },
+    ];
+    const grid = createGrid({ data: makeRows(2), columns: readonlyColumns });
+    renderer = createRenderer({ container, grid });
+
+    const firstRowCells = container.querySelectorAll('.gs-row:first-of-type .gs-cell');
+    expect(firstRowCells[0].getAttribute('aria-readonly')).toBe('true');
+    expect(firstRowCells[1].getAttribute('aria-readonly')).toBeNull();
+  });
+
+  it('sets aria-colspan on group header cells', () => {
+    const grouped: ColumnDef[] = [
+      {
+        id: 'person',
+        header: 'Person',
+        children: [
+          { id: 'name', header: 'Name', width: 100 },
+          { id: 'age', header: 'Age', width: 80 },
+        ],
+      },
+    ];
+    const grid = createGrid({ data: makeRows(2), columns: grouped });
+    renderer = createRenderer({ container, grid });
+
+    const groupCell = container.querySelector('.gs-header-cell--group') as HTMLElement;
+    expect(groupCell.getAttribute('role')).toBe('columnheader');
+    expect(groupCell.getAttribute('aria-colspan')).toBe('2');
+  });
+
+  it('adds live-region nodes as siblings of the grid root', () => {
+    const grid = createGrid({ data: makeRows(3), columns });
+    renderer = createRenderer({ container, grid });
+
+    const root = container.querySelector('.gs-grid') as HTMLElement;
+    const live = container.querySelectorAll('[aria-live]');
+    expect(live.length).toBe(2);
+    for (const region of Array.from(live)) {
+      expect(region.parentElement).toBe(container);
+      expect(root.contains(region)).toBe(false);
+    }
+    const politenesses = Array.from(live).map((el) => el.getAttribute('aria-live'));
+    expect(politenesses).toContain('polite');
+    expect(politenesses).toContain('assertive');
+  });
+
+  it('destroy() removes live regions from the container', () => {
+    const grid = createGrid({ data: makeRows(3), columns });
+    renderer = createRenderer({ container, grid });
+    expect(container.querySelectorAll('[aria-live]').length).toBe(2);
+
+    renderer.destroy();
+
+    expect(container.querySelectorAll('[aria-live]').length).toBe(0);
+    expect(container.querySelector('.gs-grid')).toBeNull();
+  });
+
+  // ─── Announcements & activedescendant ─────────────────
+
+  it('announces "Sort cleared" when the sort state is emptied', async () => {
+    vi.useFakeTimers();
+    try {
+      const grid = createGrid({
+        data: makeRows(5),
+        columns: [
+          { id: 'name', header: 'Name', width: 120, sortable: true },
+          { id: 'age', header: 'Age', width: 80 },
+        ],
+      });
+      renderer = createRenderer({ container, grid });
+
+      // Apply a sort, then clear it.
+      grid.sortState.set([{ columnId: 'name', direction: 'asc' }]);
+      flushRAF();
+      grid.sortState.set([]);
+      flushRAF();
+
+      const polite = container.querySelector('[aria-live="polite"]') as HTMLElement;
+      await vi.advanceTimersByTimeAsync(200);
+      await Promise.resolve();
+      expect(polite.textContent).toBe('Sort cleared');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('announces filter row count on filter:change', async () => {
+    vi.useFakeTimers();
+    try {
+      const grid = createGrid({ data: makeRows(10), columns });
+      renderer = createRenderer({ container, grid });
+
+      grid.filterState.set([{ columnId: 'city', operator: 'eq', value: 'Seoul' }]);
+      flushRAF();
+
+      const polite = container.querySelector('[aria-live="polite"]') as HTMLElement;
+      await vi.advanceTimersByTimeAsync(200);
+      await Promise.resolve();
+      expect(polite.textContent).toMatch(/^Showing \d+ rows$/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('updates aria-activedescendant from selection:change and clears it when cleared', () => {
+    const selection = createSelectionPlugin();
+    const grid = createGrid({ data: makeRows(5), columns, plugins: [selection] });
+    renderer = createRenderer({ container, grid });
+    const root = container.querySelector('.gs-grid') as HTMLElement;
+    const api = grid.getPlugin<SelectionPluginApi>('selection')!;
+
+    // No active cell → attr absent.
+    expect(root.getAttribute('aria-activedescendant')).toBeNull();
+
+    api.selectCell({ row: 0, col: 'name' });
+    const activeId = root.getAttribute('aria-activedescendant');
+    expect(activeId).toBeTruthy();
+    const active = document.getElementById(activeId!);
+    expect(active?.classList.contains('gs-cell')).toBe(true);
+
+    api.clear();
+    expect(root.getAttribute('aria-activedescendant')).toBeNull();
+  });
+
+  it('omits aria-activedescendant when the active cell is outside the rendered range', () => {
+    const selection = createSelectionPlugin();
+    // 10 000 rows so the active cell far below the viewport is not rendered.
+    const grid = createGrid({ data: makeRows(10_000), columns, plugins: [selection] });
+    renderer = createRenderer({ container, grid, rowHeight: 32 });
+
+    const root = container.querySelector('.gs-grid') as HTMLElement;
+    const api = grid.getPlugin<SelectionPluginApi>('selection')!;
+    api.selectCell({ row: 9000, col: 'name' });
+
+    expect(root.getAttribute('aria-activedescendant')).toBeNull();
+  });
+
+  it('announces "Invalid: …" on newly-added validation errors', async () => {
+    vi.useFakeTimers();
+    try {
+      const invalidColumns: ColumnDef[] = [
+        {
+          id: 'name',
+          header: 'Name',
+          type: 'text',
+          width: 120,
+          validate: (v) => (typeof v === 'string' && v.length > 0) || 'Name required',
+        },
+      ];
+      const grid = createGrid({
+        data: [{ name: 'Alice' }, { name: 'Bob' }],
+        columns: invalidColumns,
+        plugins: [createValidationPlugin()],
+      });
+      renderer = createRenderer({ container, grid });
+
+      const validation = grid.getPlugin<ValidationPluginApi>('validation')!;
+      validation.validateCell(0, 'name', '');
+
+      const assertive = container.querySelector('[aria-live="assertive"]') as HTMLElement;
+      await vi.advanceTimersByTimeAsync(200);
+      await Promise.resolve();
+      expect(assertive.textContent).toBe('Invalid: Name required');
+
+      // Re-reporting the same error should not re-announce — the key diff
+      // filters it out, leaving the live region untouched for 150ms.
+      assertive.textContent = '';
+      validation.validateCell(0, 'name', '');
+      await vi.advanceTimersByTimeAsync(200);
+      await Promise.resolve();
+      expect(assertive.textContent).toBe('');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
