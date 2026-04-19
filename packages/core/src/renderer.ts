@@ -1,6 +1,22 @@
+import {
+  buildCellId,
+  computeRowCount,
+  createAnnouncer,
+  dataRowAriaIndex,
+  headerRowAriaIndex,
+  nextGridInstanceId,
+  type Announcer,
+} from './aria';
 import { buildHeaderRows, getHeaderDepth, type HeaderCell } from './column-group';
 import type { Unsubscribe } from './signal';
-import type { GridInstance, ColumnDef, VisibleRange } from './types';
+import type {
+  ColumnDef,
+  GridInstance,
+  SelectionPluginApi,
+  SelectionState,
+  SortState,
+  VisibleRange,
+} from './types';
 import {
   computeColumnLayout,
   calculateVisibleRange,
@@ -46,6 +62,7 @@ const CLS = {
   canvas: 'gs-canvas',
   row: 'gs-row',
   cell: 'gs-cell',
+  srOnly: 'gs-sr-only',
 } as const;
 
 // ─── Renderer Implementation ──────────────────────────────
@@ -75,23 +92,39 @@ export function createRenderer(options: RendererOptions): RendererInstance {
   //   </div>
   // </div>
 
+  const gridInstanceId = nextGridInstanceId();
+
   const root = el('div', CLS.root);
   const header = el('div', CLS.header);
   const viewport = el('div', CLS.viewport);
   const canvas = el('div', CLS.canvas);
+  const politeLiveRegion = el('div', CLS.srOnly);
+  const assertiveLiveRegion = el('div', CLS.srOnly);
 
   let headerDepth = Math.max(1, getHeaderDepth(grid.columnDefs.get()));
   let totalHeaderHeight = headerRowHeight * headerDepth;
 
+  root.id = gridInstanceId;
+  root.setAttribute('role', 'grid');
   root.style.cssText = 'position:relative;overflow:hidden;';
+  header.setAttribute('role', 'rowgroup');
   header.style.cssText = `position:relative;height:${totalHeaderHeight}px;overflow:hidden;`;
+  viewport.setAttribute('role', 'rowgroup');
   viewport.style.cssText = 'position:relative;overflow:auto;will-change:transform;';
   canvas.style.cssText = 'position:relative;';
+
+  configureLiveRegion(politeLiveRegion, 'status', 'polite');
+  configureLiveRegion(assertiveLiveRegion, 'alert', 'assertive');
 
   viewport.appendChild(canvas);
   root.appendChild(header);
   root.appendChild(viewport);
+  container.appendChild(politeLiveRegion);
+  container.appendChild(assertiveLiveRegion);
   container.appendChild(root);
+
+  const politeAnnouncer: Announcer = createAnnouncer(politeLiveRegion);
+  const assertiveAnnouncer: Announcer = createAnnouncer(assertiveLiveRegion);
 
   // ─── State ────────────────────────────────────────────
 
@@ -120,6 +153,49 @@ export function createRenderer(options: RendererOptions): RendererInstance {
     // Viewport height = container height minus header
     const containerHeight = container.clientHeight;
     viewport.style.height = `${containerHeight - totalHeaderHeight}px`;
+
+    updateAriaCounts();
+  }
+
+  function updateAriaCounts() {
+    const rowCount = computeRowCount({
+      headerDepth,
+      pinnedTop: 0,
+      rowCount: grid.rowCount,
+      pinnedBottom: 0,
+    });
+    const visibleLeafColumns = grid.columns.get().filter((c) => c.visible !== false).length;
+    root.setAttribute('aria-rowcount', String(rowCount));
+    root.setAttribute('aria-colcount', String(visibleLeafColumns));
+  }
+
+  function updateActiveDescendant(state: SelectionState) {
+    const active = state.activeCell;
+    if (!active) {
+      root.removeAttribute('aria-activedescendant');
+      return;
+    }
+    const id = buildCellId(gridInstanceId, active.row, active.col);
+    const target = document.getElementById(id);
+    if (target && root.contains(target)) {
+      root.setAttribute('aria-activedescendant', id);
+    } else {
+      root.removeAttribute('aria-activedescendant');
+    }
+  }
+
+  function announceSort(sort: SortState) {
+    if (sort.length === 0) {
+      politeAnnouncer.announce('Sort cleared');
+      return;
+    }
+    const columnIds = grid.columns.get();
+    const parts = sort.map((entry) => {
+      const col = columnIds.find((c) => c.id === entry.columnId);
+      const label = col?.header ?? entry.columnId;
+      return `${label} ${entry.direction === 'asc' ? 'ascending' : 'descending'}`;
+    });
+    politeAnnouncer.announce(`Sorted by ${parts.join(', ')}`);
   }
 
   // ─── Header Rendering ────────────────────────────────
@@ -131,6 +207,10 @@ export function createRenderer(options: RendererOptions): RendererInstance {
     const rows = buildHeaderRows(tree);
 
     for (let r = 0; r < rows.length; r++) {
+      const rowEl = el('div', CLS.headerRow);
+      rowEl.setAttribute('role', 'row');
+      rowEl.setAttribute('aria-rowindex', String(headerRowAriaIndex(r)));
+      rowEl.style.cssText = 'position:absolute;inset:0;pointer-events:none;';
       for (const cellDef of rows[r]) {
         const { left, width } = spanExtent(cellDef, columnLayout, leafColumns);
         if (width === 0) continue; // all spanned columns are hidden
@@ -139,11 +219,16 @@ export function createRenderer(options: RendererOptions): RendererInstance {
           cellDef.isLeaf ? CLS.headerCell : `${CLS.headerCell} ${CLS.headerGroup}`,
         );
         cell.textContent = cellDef.column.header;
+        cell.setAttribute('role', 'columnheader');
+        cell.setAttribute('aria-colindex', String(cellDef.colStart + 1));
+        if (cellDef.colSpan > 1) cell.setAttribute('aria-colspan', String(cellDef.colSpan));
+        if (cellDef.rowSpan > 1) cell.setAttribute('aria-rowspan', String(cellDef.rowSpan));
         const top = r * headerRowHeight;
         const height = cellDef.rowSpan * headerRowHeight;
-        cell.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${width}px;height:${height}px;box-sizing:border-box;overflow:hidden;`;
-        header.appendChild(cell);
+        cell.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${width}px;height:${height}px;box-sizing:border-box;overflow:hidden;pointer-events:auto;`;
+        rowEl.appendChild(cell);
       }
+      header.appendChild(rowEl);
     }
   }
 
@@ -169,6 +254,8 @@ export function createRenderer(options: RendererOptions): RendererInstance {
     row.innerHTML = '';
     row.style.cssText = `position:absolute;top:${viewIndex * config.rowHeight}px;left:0;width:${columnLayout.totalWidth}px;height:${config.rowHeight}px;`;
     row.dataset.viewIndex = String(viewIndex);
+    row.setAttribute('role', 'row');
+    row.setAttribute('aria-rowindex', String(dataRowAriaIndex(viewIndex, headerDepth, 0)));
 
     for (let c = range.colStart; c <= range.colEnd; c++) {
       const col = columns[c];
@@ -178,6 +265,10 @@ export function createRenderer(options: RendererOptions): RendererInstance {
       const value = grid.getCell(viewIndex, col.id);
       cell.textContent = formatCellValue(value);
       cell.style.cssText = `position:absolute;left:${columnLayout.offsets[c]}px;width:${columnLayout.widths[c]}px;height:${config.rowHeight}px;box-sizing:border-box;overflow:hidden;`;
+      cell.id = buildCellId(gridInstanceId, viewIndex, col.id);
+      cell.setAttribute('role', 'gridcell');
+      cell.setAttribute('aria-colindex', String(c + 1));
+      if (col.editable === false) cell.setAttribute('aria-readonly', 'true');
 
       // Apply cell decorations
       const decorations = grid.getCellDecorations(viewIndex, col.id);
@@ -275,6 +366,10 @@ export function createRenderer(options: RendererOptions): RendererInstance {
     }
 
     prevRange = range;
+
+    // Refresh active-descendant now that the new cell ids are in the DOM.
+    const selectionApi = grid.getPlugin<SelectionPluginApi>('selection');
+    if (selectionApi) updateActiveDescendant(selectionApi.getState());
   }
 
   function clearAllRows() {
@@ -353,10 +448,11 @@ export function createRenderer(options: RendererOptions): RendererInstance {
   );
 
   unsubs.push(
-    grid.subscribe('sort:change', () => {
+    grid.subscribe('sort:change', ({ sort }) => {
       clearAllRows();
       prevRange = null;
       scheduleRender();
+      announceSort(sort);
     }),
   );
 
@@ -365,6 +461,26 @@ export function createRenderer(options: RendererOptions): RendererInstance {
       clearAllRows();
       prevRange = null;
       scheduleRender();
+      politeAnnouncer.announce(`Showing ${grid.rowCount} rows`);
+    }),
+  );
+
+  unsubs.push(
+    grid.subscribe('selection:change', (state) => {
+      updateActiveDescendant(state);
+    }),
+  );
+
+  // Key-based diff catches the clear-and-add-in-same-tick case that a
+  // simple count comparison would miss.
+  let prevErrorKeys = new Set<string>();
+  unsubs.push(
+    grid.subscribe('validation:change', ({ errors }) => {
+      const nonPending = errors.filter((e) => e.state !== 'pending');
+      const currentKeys = new Set(nonPending.map((e) => `${e.dataIndex}:${e.columnId}`));
+      const newlyAdded = nonPending.find((e) => !prevErrorKeys.has(`${e.dataIndex}:${e.columnId}`));
+      if (newlyAdded) assertiveAnnouncer.announce(`Invalid: ${newlyAdded.message}`);
+      prevErrorKeys = currentKeys;
     }),
   );
 
@@ -403,10 +519,19 @@ export function createRenderer(options: RendererOptions): RendererInstance {
       for (const unsub of unsubs) unsub();
       unsubs.length = 0;
 
+      politeAnnouncer.destroy();
+      assertiveAnnouncer.destroy();
+
       clearAllRows();
       rowPool.length = 0;
 
       container.removeChild(root);
+      if (politeLiveRegion.parentNode === container) {
+        container.removeChild(politeLiveRegion);
+      }
+      if (assertiveLiveRegion.parentNode === container) {
+        container.removeChild(assertiveLiveRegion);
+      }
     },
   };
 }
@@ -417,6 +542,14 @@ function el(tag: string, className: string): HTMLDivElement {
   const element = document.createElement(tag) as HTMLDivElement;
   element.className = className;
   return element;
+}
+
+function configureLiveRegion(node: HTMLElement, role: string, politeness: 'polite' | 'assertive') {
+  node.setAttribute('role', role);
+  node.setAttribute('aria-live', politeness);
+  node.setAttribute('aria-atomic', 'true');
+  node.style.cssText =
+    'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;';
 }
 
 function formatCellValue(value: string | number | boolean | Date | null | undefined): string {

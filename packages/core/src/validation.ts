@@ -374,6 +374,7 @@ export function createValidationPlugin(): GridPlugin {
           return { className: 'gs-cell--validating', attributes };
         }
         attributes['data-validation-message'] = err.message;
+        attributes['aria-invalid'] = 'true';
         // Native `title` is the fallback tooltip — the React adapter renders a
         // styled overlay on top of it, but consumers without the overlay still
         // see the error message on hover with zero extra code.

@@ -13,19 +13,26 @@ import {
   type Row,
   type SelectionPluginApi,
   type VisibleRange,
+  buildCellId,
   buildHeaderRows,
+  buildPinnedCellId,
   calculateVisibleRange,
   columnStructureKey,
   computeColumnLayout,
+  computeRowCount,
   createClipboardPlugin,
   createEditingPlugin,
   createFillHandlePlugin,
   createHistoryPlugin,
   createSelectionPlugin,
   createValidationPlugin,
+  dataRowAriaIndex,
   flattenColumns,
   getHeaderDepth,
   getTotalHeight,
+  headerRowAriaIndex,
+  pinnedBottomAriaIndex,
+  pinnedTopAriaIndex,
   DEFAULT_CONFIG,
 } from '@gridsmith/core';
 import {
@@ -34,6 +41,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -44,10 +52,23 @@ import { FilterPopover } from './filter-popover';
 import { cycleSortState } from './header-sort';
 import type { GridProps } from './types';
 import { useGrid } from './use-grid';
+import { useGridAnnouncements } from './use-grid-announcements';
 import { useGridSelection } from './use-grid-selection';
 import { useSignalValue } from './use-signal';
 
 // ─── Helpers ───────────────────────────────────────────────
+
+const SR_ONLY_STYLE: CSSProperties = {
+  position: 'absolute',
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: 'hidden',
+  clip: 'rect(0,0,0,0)',
+  whiteSpace: 'nowrap',
+  border: 0,
+};
 
 function formatCellValue(value: CellValue): string {
   if (value == null) return '';
@@ -315,6 +336,13 @@ export const Grid = memo(function Grid({
   const viewportRef = useRef<HTMLDivElement>(null);
   const headerInnerRef = useRef<HTMLDivElement>(null);
   const gridRootRef = useRef<HTMLDivElement>(null);
+  const politeLiveRef = useRef<HTMLDivElement>(null);
+  const assertiveLiveRef = useRef<HTMLDivElement>(null);
+  // `useId()` is SSR-stable across server render → client hydration so the
+  // cell `id`s and `aria-activedescendant` references line up on first paint.
+  // `:` is not valid in CSS id selectors, so strip it for the prefix.
+  const reactId = useId();
+  const gridId = `gs-${reactId.replace(/:/g, '')}`;
   const [visibleRange, setVisibleRange] = useState<VisibleRange | null>(null);
 
   // Refs for latest values so the scroll handler never goes stale
@@ -578,6 +606,8 @@ export const Grid = memo(function Grid({
 
   const currentPinnedTop = useSignalValue(grid.pinnedTopRows);
   const currentPinnedBottom = useSignalValue(grid.pinnedBottomRows);
+  const pinnedTopCount = currentPinnedTop.length;
+  const pinnedBottomCount = currentPinnedBottom.length;
 
   // ─── Render header ─────────────────────────────────────
 
@@ -627,6 +657,10 @@ export const Grid = memo(function Grid({
           aria-sort={
             sortInfo ? (sortInfo.direction === 'asc' ? 'ascending' : 'descending') : 'none'
           }
+          aria-rowindex={headerRowAriaIndex(rowIndex)}
+          aria-colindex={cell.colStart + 1}
+          aria-rowspan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
+          aria-readonly={col.editable === false ? true : undefined}
           data-col={col.id}
           draggable={draggable}
           onDragStart={draggable ? (e) => handleDragStart(e, col.id, i) : undefined}
@@ -755,6 +789,9 @@ export const Grid = memo(function Grid({
           key={`group:${cell.column.id}:${cell.colStart}`}
           className="gs-header-cell gs-header-cell--group"
           role="columnheader"
+          aria-rowindex={headerRowAriaIndex(rowIndex)}
+          aria-colindex={cell.colStart + 1}
+          aria-colspan={cell.colSpan > 1 ? cell.colSpan : undefined}
           data-col-group={cell.column.id}
           style={{
             position: 'absolute',
@@ -781,9 +818,25 @@ export const Grid = memo(function Grid({
   const headerCells = useMemo(() => {
     const out: ReactNode[] = [];
     for (let r = 0; r < headerRows.length; r++) {
+      const cells: ReactNode[] = [];
       for (const cell of headerRows[r]) {
-        out.push(cell.isLeaf ? renderLeafHeaderCell(cell, r) : renderGroupHeaderCell(cell, r));
+        const node = cell.isLeaf ? renderLeafHeaderCell(cell, r) : renderGroupHeaderCell(cell, r);
+        if (node) cells.push(node);
       }
+      out.push(
+        // `display: contents` keeps the wrapper out of the layout so the
+        // already-absolutely-positioned header cells resolve against the
+        // outer relative container, but preserves the `role="row"` node in
+        // the accessibility tree.
+        <div
+          key={`header-row-${r}`}
+          role="row"
+          aria-rowindex={headerRowAriaIndex(r)}
+          style={{ display: 'contents' }}
+        >
+          {cells}
+        </div>,
+      );
     }
     return out;
   }, [headerRows, renderLeafHeaderCell, renderGroupHeaderCell]);
@@ -882,8 +935,12 @@ export const Grid = memo(function Grid({
         cells.push(
           <div
             key={col.id}
+            id={buildCellId(gridId, r, col.id)}
             className={cellClassName}
             style={cellStyle}
+            role="gridcell"
+            aria-colindex={c + 1}
+            aria-readonly={col.editable === false ? true : undefined}
             data-row={r}
             data-col={col.id}
             {...attrs}
@@ -897,6 +954,8 @@ export const Grid = memo(function Grid({
         <div
           key={r}
           className="gs-row"
+          role="row"
+          aria-rowindex={dataRowAriaIndex(r, headerDepth, pinnedTopCount)}
           style={{
             position: 'absolute',
             top: r * rowHeight,
@@ -921,6 +980,9 @@ export const Grid = memo(function Grid({
     rowHeight,
     dataVersion,
     selection,
+    gridId,
+    headerDepth,
+    pinnedTopCount,
   ]);
 
   // ─── Cell interaction handlers ──────────────────────────
@@ -1679,7 +1741,11 @@ export const Grid = memo(function Grid({
           cells.push(
             <div
               key={col.id}
+              id={buildPinnedCellId(gridId, position, dataIdx, col.id)}
               className={cellClassName}
+              role="gridcell"
+              aria-colindex={c + 1}
+              aria-readonly={col.editable === false ? true : undefined}
               style={{
                 position: 'absolute',
                 left: columnLayout.offsets[c],
@@ -1696,10 +1762,17 @@ export const Grid = memo(function Grid({
           );
         }
 
+        const rowAriaIndex =
+          position === 'top'
+            ? pinnedTopAriaIndex(i, headerDepth)
+            : pinnedBottomAriaIndex(i, headerDepth, pinnedTopCount, totalRows);
+
         rows.push(
           <div
             key={dataIdx}
             className={`gs-row gs-row--pinned gs-row--pinned-${position}`}
+            role="row"
+            aria-rowindex={rowAriaIndex}
             data-pinned={position}
             data-data-index={dataIdx}
             style={{
@@ -1716,6 +1789,7 @@ export const Grid = memo(function Grid({
       return (
         <div
           className={`gs-pinned-rows gs-pinned-rows--${position}`}
+          role="rowgroup"
           style={{
             position: 'relative',
             flexShrink: 0,
@@ -1729,7 +1803,17 @@ export const Grid = memo(function Grid({
         </div>
       );
     },
-    [currentColumns, columnLayout, rowHeight, grid, dataVersion],
+    [
+      currentColumns,
+      columnLayout,
+      rowHeight,
+      grid,
+      dataVersion,
+      gridId,
+      headerDepth,
+      pinnedTopCount,
+      totalRows,
+    ],
   );
 
   const pinnedTopRowsEl = useMemo(
@@ -1742,114 +1826,154 @@ export const Grid = memo(function Grid({
     [renderPinnedRows, currentPinnedBottom],
   );
 
+  // ─── ARIA grid counts + live-region announcements ──────
+
+  const ariaRowCount = computeRowCount({
+    headerDepth,
+    pinnedTop: pinnedTopCount,
+    rowCount: totalRows,
+    pinnedBottom: pinnedBottomCount,
+  });
+  const ariaColCount = currentColumns.filter((c) => c.visible !== false).length;
+  const activeDescendantId = focusedCell
+    ? buildCellId(gridId, focusedCell.row, focusedCell.col)
+    : undefined;
+
+  useGridAnnouncements(grid, politeLiveRef, assertiveLiveRef);
+
   // ─── JSX ───────────────────────────────────────────────
 
   return (
-    <div
-      className={className ? `gs-grid ${className}` : 'gs-grid'}
-      style={{
-        position: 'relative',
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-      }}
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-      ref={gridRootRef}
-    >
+    <>
       <div
-        className="gs-header"
+        ref={politeLiveRef}
+        className="gs-sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        style={SR_ONLY_STYLE}
+      />
+      <div
+        ref={assertiveLiveRef}
+        className="gs-sr-only"
+        role="alert"
+        aria-live="assertive"
+        aria-atomic="true"
+        style={SR_ONLY_STYLE}
+      />
+      <div
+        id={gridId}
+        className={className ? `gs-grid ${className}` : 'gs-grid'}
+        role="grid"
+        aria-rowcount={ariaRowCount}
+        aria-colcount={ariaColCount}
+        aria-activedescendant={activeDescendantId}
         style={{
-          // `overflow: visible` so the filter popover (which anchors at the
-          // header cell's left edge and drops below the header) is not
-          // clipped by the header element's bounding box.
           position: 'relative',
-          height: totalHeaderHeight,
-          flexShrink: 0,
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
         }}
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        ref={gridRootRef}
       >
         <div
-          ref={headerInnerRef}
+          className="gs-header"
+          role="rowgroup"
           style={{
+            // `overflow: visible` so the filter popover (which anchors at the
+            // header cell's left edge and drops below the header) is not
+            // clipped by the header element's bounding box.
             position: 'relative',
-            width: columnLayout.totalWidth,
             height: totalHeaderHeight,
+            flexShrink: 0,
           }}
         >
-          {headerCells}
-          {filterPopover}
+          <div
+            ref={headerInnerRef}
+            style={{
+              position: 'relative',
+              width: columnLayout.totalWidth,
+              height: totalHeaderHeight,
+            }}
+          >
+            {headerCells}
+            {filterPopover}
+          </div>
         </div>
-      </div>
-      {pinnedTopRowsEl}
-      <div
-        ref={viewportRef}
-        className="gs-viewport"
-        style={{
-          position: 'relative',
-          overflow: 'auto',
-          flex: 1,
-        }}
-        onMouseDown={handleCellMouseDown}
-        onMouseMove={handleCellMouseMove}
-        onMouseUp={handleCellMouseUp}
-        onMouseLeave={handleCellMouseUp}
-        onClick={handleCellClick}
-        onDoubleClick={handleDoubleClick}
-      >
+        {pinnedTopRowsEl}
         <div
-          className="gs-canvas"
+          ref={viewportRef}
+          className="gs-viewport"
+          role="rowgroup"
           style={{
             position: 'relative',
-            height: totalHeight,
-            width: columnLayout.totalWidth,
+            overflow: 'auto',
+            flex: 1,
           }}
+          onMouseDown={handleCellMouseDown}
+          onMouseMove={handleCellMouseMove}
+          onMouseUp={handleCellMouseUp}
+          onMouseLeave={handleCellMouseUp}
+          onClick={handleCellClick}
+          onDoubleClick={handleDoubleClick}
         >
-          {rowElements}
-          {editorOverlay}
-          {fillPreviewRect && (
-            <div
-              className="gs-fill-preview"
-              aria-hidden="true"
-              style={{
-                position: 'absolute',
-                left: fillPreviewRect.left,
-                top: fillPreviewRect.top,
-                width: fillPreviewRect.width,
-                height: fillPreviewRect.height,
-                border: '1px dashed #1a73e8',
-                boxSizing: 'border-box',
-                pointerEvents: 'none',
-                zIndex: 4,
-              }}
-            />
-          )}
-          {fillHandleVisible && activeRangeRect && (
-            <div
-              className="gs-fill-handle"
-              role="presentation"
-              aria-hidden="true"
-              onPointerDown={handleFillHandlePointerDown}
-              onPointerMove={handleFillHandlePointerMove}
-              onPointerUp={handleFillHandlePointerUp}
-              onPointerCancel={handleFillHandlePointerUp}
-              style={{
-                position: 'absolute',
-                left: activeRangeRect.left + activeRangeRect.width - 4,
-                top: activeRangeRect.top + activeRangeRect.height - 4,
-                width: 8,
-                height: 8,
-                background: '#1a73e8',
-                border: '1px solid white',
-                boxSizing: 'border-box',
-                cursor: 'crosshair',
-                zIndex: 5,
-                touchAction: 'none',
-              }}
-            />
-          )}
+          <div
+            className="gs-canvas"
+            style={{
+              position: 'relative',
+              height: totalHeight,
+              width: columnLayout.totalWidth,
+            }}
+          >
+            {rowElements}
+            {editorOverlay}
+            {fillPreviewRect && (
+              <div
+                className="gs-fill-preview"
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  left: fillPreviewRect.left,
+                  top: fillPreviewRect.top,
+                  width: fillPreviewRect.width,
+                  height: fillPreviewRect.height,
+                  border: '1px dashed #1a73e8',
+                  boxSizing: 'border-box',
+                  pointerEvents: 'none',
+                  zIndex: 4,
+                }}
+              />
+            )}
+            {fillHandleVisible && activeRangeRect && (
+              <div
+                className="gs-fill-handle"
+                role="presentation"
+                aria-hidden="true"
+                onPointerDown={handleFillHandlePointerDown}
+                onPointerMove={handleFillHandlePointerMove}
+                onPointerUp={handleFillHandlePointerUp}
+                onPointerCancel={handleFillHandlePointerUp}
+                style={{
+                  position: 'absolute',
+                  left: activeRangeRect.left + activeRangeRect.width - 4,
+                  top: activeRangeRect.top + activeRangeRect.height - 4,
+                  width: 8,
+                  height: 8,
+                  background: '#1a73e8',
+                  border: '1px solid white',
+                  boxSizing: 'border-box',
+                  cursor: 'crosshair',
+                  zIndex: 5,
+                  touchAction: 'none',
+                }}
+              />
+            )}
+          </div>
         </div>
+        {pinnedBottomRowsEl}
       </div>
-      {pinnedBottomRowsEl}
-    </div>
+    </>
   );
 });

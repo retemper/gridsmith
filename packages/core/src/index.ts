@@ -56,6 +56,20 @@ export {
 } from './column-group';
 export type { HeaderCell } from './column-group';
 
+// ARIA helpers
+export {
+  buildCellId,
+  buildPinnedCellId,
+  computeRowCount,
+  createAnnouncer,
+  dataRowAriaIndex,
+  headerRowAriaIndex,
+  nextGridInstanceId,
+  pinnedBottomAriaIndex,
+  pinnedTopAriaIndex,
+} from './aria';
+export type { Announcer, AriaRowCountInput } from './aria';
+
 // Types
 export type {
   CellValue,
