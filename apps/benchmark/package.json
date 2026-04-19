@@ -4,14 +4,29 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "bench": "vitest bench",
-    "bench:run": "vitest bench --run"
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "bundle-sizes": "node scripts/measure-bundles.mjs"
   },
   "dependencies": {
-    "@gridsmith/core": "workspace:*"
+    "@glideapps/glide-data-grid": "^6.0.3",
+    "@gridsmith/core": "workspace:*",
+    "@gridsmith/react": "workspace:*",
+    "@gridsmith/ui": "workspace:*",
+    "@handsontable/react": "^14.6.1",
+    "ag-grid-community": "^32.3.0",
+    "ag-grid-react": "^32.3.0",
+    "handsontable": "^14.6.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "esbuild": "^0.24.0",
     "typescript": "^5.6.0",
-    "vitest": "^4.1.0"
+    "vite": "^6.3.0"
   }
 }
