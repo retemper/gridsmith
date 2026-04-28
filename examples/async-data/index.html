@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gridsmith — Async Data Example</title>
+    <style>
+      .gs-cell--loading {
+        background: linear-gradient(90deg, #f1f5f9 0%, #e2e8f0 50%, #f1f5f9 100%);
+        background-size: 200% 100%;
+        animation: gs-shimmer 1.4s linear infinite;
+        color: transparent;
+      }
+      @keyframes gs-shimmer {
+        from {
+          background-position: 200% 0;
+        }
+        to {
+          background-position: 0 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
