@@ -1,5 +1,18 @@
 # @gridsmith/core
 
+## 1.0.1
+
+### Patch Changes
+
+- [#52](https://github.com/retemper/gridsmith/pull/52) [`4e18545`](https://github.com/retemper/gridsmith/commit/4e18545ce4cd27d332dd5cd00b01d725ce186d1e) Thanks [@devKangMinHyeok](https://github.com/devKangMinHyeok)! - Switch the release pipeline to npm Trusted Publishing (OIDC) and enable provenance attestations.
+
+  Each tarball now ships with a Sigstore-signed npm provenance attestation linking the
+  release back to the GitHub Actions workflow that built it
+  (`retemper/gridsmith` → `.github/workflows/publish.yml`). Consumers can verify the
+  chain with `npm audit signatures`. No long-lived npm token is required for releases —
+  the publish workflow authenticates to the registry via short-lived GitHub OIDC
+  identities scoped to this repo and workflow path.
+
 ## 1.0.0
 
 ### Major Changes
