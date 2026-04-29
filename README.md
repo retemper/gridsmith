@@ -81,7 +81,7 @@ Editing Engine       (selection, clipboard, fill, undo, validate)
 Headless Core        (state, columns, rows, sort, filter)
 Renderer             (DOM v1, Canvas v2)
 Virtualization       (rows + columns)
-Data Source           (sync, async, streaming)
+Data Source          (sync, async)
 ```
 
 ## Contributing
