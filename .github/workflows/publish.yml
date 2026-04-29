@@ -31,8 +31,10 @@ jobs:
           cache: 'pnpm'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Upgrade npm for Trusted Publishing
-        run: npm install -g npm@latest
+      - name: Install npm >=11.5 for Trusted Publishing
+        run: |
+          npm install -g npm@latest --prefix "$HOME/.npm-trusted"
+          echo "$HOME/.npm-trusted/bin" >> "$GITHUB_PATH"
 
       - run: pnpm install --frozen-lockfile
 
