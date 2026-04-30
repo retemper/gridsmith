@@ -29,7 +29,6 @@ jobs:
         with:
           node-version-file: '.nvmrc'
           cache: 'pnpm'
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Install npm >=11.5 for Trusted Publishing
         run: |
