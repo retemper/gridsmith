@@ -1,6 +1,6 @@
 {
   "name": "@gridsmith/react",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "module",
   "description": "React adapter for Gridsmith data grid",
   "license": "MIT",
