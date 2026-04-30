@@ -39,8 +39,33 @@ jobs:
 
       - run: pnpm turbo build
 
-      - name: Publish to npm
-        run: pnpm changeset:publish --no-git-tag
+      - name: Publish unpublished packages via OIDC trusted publishing
+        run: |
+          set -e
+          npm --version
+          for pkg_json in $(find packages -name 'package.json' -not -path '*/node_modules/*'); do
+            pkg_dir=$(dirname "$pkg_json")
+            private=$(jq -r '.private // false' "$pkg_json")
+            if [ "$private" = "true" ]; then
+              echo "Skipping $(jq -r '.name' "$pkg_json") (private)"
+              continue
+            fi
+
+            name=$(jq -r '.name' "$pkg_json")
+            version=$(jq -r '.version' "$pkg_json")
+
+            if npm view "${name}@${version}" version > /dev/null 2>&1; then
+              echo "Skipping ${name}@${version} (already published)"
+              continue
+            fi
+
+            echo "::group::Pack and publish ${name}@${version}"
+            pack_dir=$(mktemp -d)
+            (cd "$pkg_dir" && pnpm pack --pack-destination "$pack_dir")
+            tarball=$(ls "$pack_dir"/*.tgz | head -1)
+            npm publish "$tarball" --access public --provenance
+            echo "::endgroup::"
+          done
 
       - name: Create git tags and GitHub Releases
         run: |
